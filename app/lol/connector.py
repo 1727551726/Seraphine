@@ -278,10 +278,28 @@ class LolClientConnector(QObject):
             signalBus.champSelectChanged.emit(event)
 
         @self.listener.subscribe(event="OnJsonApiEvent_entitlements_v1_token",
-                                 uri='/entitlements/v1/token',
-                                 type=("Update",))
+                                  uri='/entitlements/v1/token',
+                                  type=("Update",))
         async def onSGPTokenChanged(event):
             self.sgpToken = event['data']['accessToken']
+
+        @self.listener.subscribe(event='OnJsonApiEvent_lol-honor-v2_v1_ballot',
+                                  uri='/lol-honor-v2/v1/ballot',
+                                  type=('Update', 'Create'))
+        async def onHonorBallotChanged(event):
+            signalBus.honorBallotChanged.emit(event['data'])
+
+        @self.listener.subscribe(event='OnJsonApiEvent_lol-matchmaking_v1_ready-check',
+                                  uri='/lol-matchmaking/v1/ready-check',
+                                  type=('Update',))
+        async def onReadyCheckChanged(event):
+            signalBus.readyCheckChanged.emit(event['data'])
+
+        @self.listener.subscribe(event='OnJsonApiEvent_lol-lobby_v2_lobby',
+                                  uri='/lol-lobby/v2/lobby',
+                                  type=('Update',))
+        async def onLobbyChanged(event):
+            signalBus.lobbyChanged.emit(event['data'])
 
         # @self.listener.subscribe(event='OnJsonApiEvent', type=())
         # async def onDebugListen(event):
@@ -1185,6 +1203,66 @@ class LolClientConnector(QObject):
         port, token, _ = getPortTokenServerByPid(pid)
         url = f'https://riot:{token}@127.0.0.1:{port}/lol-summoner/v1/current-summoner'
         return requests.get(url, verify=False).json()
+
+    @retry()
+    async def getHonorBallot(self):
+        res = await self.__get("/lol-honor-v2/v1/ballot")
+        return await res.json()
+
+    @retry()
+    async def honorPlayer(self, gameId, honorCategory, summonerId):
+        data = {
+            "gameId": gameId,
+            "honorCategory": honorCategory,
+            "summonerId": summonerId
+        }
+        res = await self.__post("/lol-honor-v2/v1/honor-player/", data=data)
+        return res
+
+    @retry()
+    async def getEogStatus(self):
+        res = await self.__get("/lol-lobby/v2/party/eog-status")
+        return await res.json()
+
+    @retry()
+    async def getLobby(self):
+        res = await self.__get("/lol-lobby/v2/lobby")
+        return await res.json()
+
+    @retry()
+    async def startMatchmaking(self):
+        res = await self.__post("/lol-lobby/v2/lobby/matchmaking/search")
+        return res
+
+    @retry()
+    async def stopMatchmaking(self):
+        res = await self.__delete("/lol-lobby/v2/lobby/matchmaking/search")
+        return res
+
+    @retry()
+    async def getMatchmakingSearch(self):
+        res = await self.__get("/lol-matchmaking/v1/search")
+        return await res.json()
+
+    @retry()
+    async def declineMatchMaking(self):
+        res = await self.__post("/lol-matchmaking/v1/ready-check/decline")
+        return res
+
+    @retry()
+    async def sendChatMessage(self, conversationId, message):
+        data = {
+            "body": message,
+            "type": "chat"
+        }
+        res = await self.__post(
+            f"/lol-chat/v1/conversations/{conversationId}/messages", data=data)
+        return res
+
+    @retry()
+    async def getGameflowPhase(self):
+        res = await self.__get("/lol-gameflow/v1/gameflow-phase")
+        return await res.json()
 
 
 class JsonManager:

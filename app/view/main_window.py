@@ -25,6 +25,7 @@ from app.view.career_interface import CareerInterface
 from app.view.search_interface import SearchInterface
 from app.view.game_info_interface import GameInfoInterface
 from app.view.auxiliary_interface import AuxiliaryInterface
+from app.view.gameflow_interface import GameflowInterface
 from app.view.opgg_window import OpggWindow
 from app.common.util import (github, getLolClientPid, getTasklistPath,
                              getLolClientPidSlowly, getLoLPathByRegistry)
@@ -77,6 +78,7 @@ class MainWindow(FluentWindow):
         self.searchInterface = SearchInterface(self)
         self.gameInfoInterface = GameInfoInterface(self)
         self.auxiliaryFuncInterface = AuxiliaryInterface(self)
+        self.gameflowInterface = GameflowInterface(self)
         self.settingInterface = SettingInterface(self)
 
         logger.critical("Seraphine interfaces initialized", TAG)
@@ -140,6 +142,7 @@ class MainWindow(FluentWindow):
         self.searchInterface.setObjectName("searchInterface")
         self.gameInfoInterface.setObjectName("gameInfoInterface")
         self.auxiliaryFuncInterface.setObjectName("auxiliaryFuncInterface")
+        self.gameflowInterface.setObjectName("gameflowInterface")
         self.settingInterface.setObjectName("settingInterface")
 
     def __initNavigation(self):
@@ -158,6 +161,9 @@ class MainWindow(FluentWindow):
         self.addSubInterface(
             self.auxiliaryFuncInterface, Icon.WRENCH,
             self.tr("Auxiliary Functions"), pos)
+        self.addSubInterface(
+            self.gameflowInterface, Icon.GAME,
+            self.tr("游戏流"), pos)
 
         pos = NavigationItemPosition.BOTTOM
 

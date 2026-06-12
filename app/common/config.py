@@ -163,6 +163,31 @@ class Config(QConfig):
     enableReserveGameinfo = ConfigItem(
         "Functions", "EnableReserveGameinfo", False, BoolValidator())
 
+    # 自动游戏流配置
+    enableAutoHonor = ConfigItem(
+        "AutoGameflow", "EnableAutoHonor", False, BoolValidator())
+    autoHonorStrategy = OptionsConfigItem(
+        "AutoGameflow", "AutoHonorStrategy", "prefer-lobby-member",
+        OptionsValidator(["prefer-lobby-member", "only-lobby-member", "all-member",
+                         "all-member-including-opponent", "opt-out"]))
+
+    enableAutoPlayAgain = ConfigItem(
+        "AutoGameflow", "EnableAutoPlayAgain", False, BoolValidator())
+
+    enableAutoSearchMatch = ConfigItem(
+        "AutoGameflow", "EnableAutoSearchMatch", False, BoolValidator())
+    autoSearchMatchDelay = RangeConfigItem(
+        "AutoGameflow", "AutoSearchMatchDelay", 5, RangeValidator(0, 30))
+    autoSearchMinimumMembers = RangeConfigItem(
+        "AutoGameflow", "AutoSearchMinimumMembers", 1, RangeValidator(1, 5))
+    autoSearchWaitForInvitees = ConfigItem(
+        "AutoGameflow", "AutoSearchWaitForInvitees", True, BoolValidator())
+    autoSearchRematchStrategy = OptionsConfigItem(
+        "AutoGameflow", "AutoSearchRematchStrategy", "never",
+        OptionsValidator(["never", "fixed-duration", "estimated-duration"]))
+    autoSearchRematchFixedDuration = RangeConfigItem(
+        "AutoGameflow", "AutoSearchRematchFixedDuration", 2, RangeValidator(1, 10))
+
 
 YEAR = 2023
 AUTHOR = "Zzaphkiel"

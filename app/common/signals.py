@@ -36,5 +36,10 @@ class SignalBus(QObject):
     # OPGG:
     toOpggBuildInterface = pyqtSignal(int, str, str)
 
+    # Gameflow:
+    honorBallotChanged = pyqtSignal(dict)
+    readyCheckChanged = pyqtSignal(dict)
+    lobbyChanged = pyqtSignal(dict)
+
 
 signalBus = SignalBus()
