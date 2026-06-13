@@ -1,3 +1,5 @@
+import asyncio
+
 import aiohttp
 from async_lru import alru_cache
 
@@ -11,7 +13,8 @@ class Opgg:
         self.session = None
 
     async def start(self):
-        self.session = aiohttp.ClientSession("https://lol-api-champion.op.gg")
+        timeout = aiohttp.ClientTimeout(total=15)
+        self.session = aiohttp.ClientSession("https://lol-api-champion.op.gg", timeout=timeout)
 
     async def close(self):
         if self.session:
@@ -82,8 +85,14 @@ class Opgg:
         return []
 
     async def __get(self, url, params=None):
-        res = await self.session.get(url, params=params, ssl=False, proxy=None)
-        return await res.json()
+        for i in range(3):
+            try:
+                res = await self.session.get(url, params=params, ssl=False, proxy=None)
+                return await res.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                if i == 2:
+                    raise
+                await asyncio.sleep(1)
 
 
 class OpggDataParser:
