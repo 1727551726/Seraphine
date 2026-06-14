@@ -66,6 +66,7 @@ class Icon(FluentIconBase, Enum):
     ERASER = "Eraser"
     ATTACHTEXT = "AttachText"
     TEXTCOLOR = "TextColor"
+    GAMEFLOW = 'GameFlow'
 
     def path(self, theme=Theme.AUTO):
         return f'./app/resource/icons/{self.value}_{getIconColor(theme)}.svg'
