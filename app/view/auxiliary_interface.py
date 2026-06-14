@@ -10,8 +10,8 @@ from app.common.config import cfg
 from app.common.icons import Icon
 from app.common.qfluentwidgets import (SettingCardGroup, SwitchSettingCard, ExpandLayout,
                                        SettingCard, LineEdit, PushButton,
-                                       ComboBox, SwitchButton,
-                                       InfoBar, InfoBarPosition,
+                                       ComboBox, SwitchButton, ExpandGroupSettingCard,
+                                       IndicatorPosition, InfoBar, InfoBarPosition,
                                        Flyout, FlyoutAnimationType, MessageBox)
 from app.common.style_sheet import StyleSheet
 from app.components.multi_champion_select import ChampionSelectFlyout, SplashesFlyout
