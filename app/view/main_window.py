@@ -493,6 +493,7 @@ class MainWindow(FluentWindow):
         self.__setLolInstallFolder(folder)
 
         asyncio.create_task(self.auxiliaryFuncInterface.initChampionList())
+        asyncio.create_task(self.gameflowInterface.initChampionList())
 
         self.auxiliaryFuncInterface.lockConfigCard.loadNowMode()
 
