@@ -159,11 +159,11 @@ class MainWindow(FluentWindow):
         self.addSubInterface(
             self.gameInfoInterface, Icon.GAME, self.tr("Game Information"), pos)
         self.addSubInterface(
-            self.auxiliaryFuncInterface, Icon.WRENCH,
-            self.tr("Auxiliary Functions"), pos)
-        self.addSubInterface(
             self.gameflowInterface, Icon.GAMEFLOW,
             self.tr("游戏流"), pos)
+        self.addSubInterface(
+            self.auxiliaryFuncInterface, Icon.WRENCH,
+            self.tr("Auxiliary Functions"), pos)
 
         pos = NavigationItemPosition.BOTTOM
 
