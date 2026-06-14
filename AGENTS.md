@@ -109,6 +109,14 @@ app/
 - **图标双版本**: 新增图标必须同时提供 `_black.svg` 和 `_white.svg`，通过 `Icon` 枚举注册
 - **样式表加载**: 通过 `StyleSheet.XXX.apply(self)` 加载，不直接 `setStyleSheet()`
 
+## 工作流约束
+
+- **禁止擅自提交**: 未经用户明确指令，不得执行 `git commit` 或 `git push`。所有代码修改完成后，等待用户确认再提交。
+- **修改后必须 Code Review + 启动验证**: 每次代码修改完成后，必须：
+  1. 启动 subagent 对变更文件进行 code review（检查语法、导入完整性、逻辑正确性）
+  2. Code review 通过后，运行 `python main.py` 启动应用，确认无报错正常运行
+  3. 若发现问题，修复后重复上述流程
+
 ## 开发日志规范
 
 **当用户要求提交修改时，必须先生成开发日志：**
