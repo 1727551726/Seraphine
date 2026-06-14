@@ -860,7 +860,20 @@ class MainWindow(FluentWindow):
         session = await connector.getChampSelectSession()
 
         if cfg.get(cfg.autoShowOpgg):
-            self.opggWindow.show()
+            # 判断当前是否为召唤师峡谷模式，只有召唤师峡谷才自动弹出
+            try:
+                gameflowSession = await connector.getGameflowSession()
+                queueId = gameflowSession['gameData']['queue']['id']
+                # 召唤师峡谷的 mapId 为 11
+                mapId = connector.manager.queues.get(queueId, {}).get('mapId')
+                isSummonersRift = mapId == 11
+            except Exception:
+                # 获取失败时，使用备选方案判断
+                isSummonersRift = not session.get('benchEnabled') \
+                    and len(session.get('myTeam', [])) != 2
+
+            if isSummonersRift:
+                self.opggWindow.show()
 
         currentSummonerId = self.currentSummoner['summonerId']
         info = await parseAllyGameInfo(session, currentSummonerId, useSGP=True)
