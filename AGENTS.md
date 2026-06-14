@@ -93,6 +93,22 @@ app/
 
 `app/common/update.py` 生成 PowerShell 脚本（`updater.ps1`），等待 Seraphine.exe 退出，通过 `filelist.txt` 删除旧文件，从 `%AppData%/Seraphine/temp` 移动新文件，然后重新启动 exe。
 
+## 界面设计约束
+
+**所有 UI 修改必须遵守 `design.md` 中的设计规范。** 核心约束：
+
+- **Fluent Design**: 基于 PyQt-Fluent-Widgets，不引入其他 UI 框架或自造轮子
+- **双主题必须**: 每个页面/组件必须同时提供 `dark/` 和 `light/` 两套 QSS，禁止硬编码颜色值
+- **圆角统一**: 卡片/面板 6px，按钮 5-6px，不得随意使用其他圆角值
+- **字体规范**: 西文 `Segoe UI` + 中文 `Microsoft YaHei`，基础字号 14px
+- **页面内边距**: 统一 `30, 32, 30, 20` 或 `30, 32, 30, 30`
+- **主题色变量**: 使用 `--ThemeColor` CSS 变量，不硬编码主题色
+- **状态色可定制**: 胜/负/重做颜色必须从 `cfg` 读取，支持用户自定义
+- **组件复用**: 使用 `app/components/` 中已有的自定义组件（`CardWidget`、`TransparentButton`、`SummonerName` 等），不重复造轮子
+- **加载状态**: 使用 `QStackedWidget` 模式（索引 0=加载页，索引 1=内容页）
+- **图标双版本**: 新增图标必须同时提供 `_black.svg` 和 `_white.svg`，通过 `Icon` 枚举注册
+- **样式表加载**: 通过 `StyleSheet.XXX.apply(self)` 加载，不直接 `setStyleSheet()`
+
 ## 开发日志规范
 
 **当用户要求提交修改时，必须先生成开发日志：**
