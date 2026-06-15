@@ -144,7 +144,8 @@ class ChampionsSelectWidget(QWidget):
             for icon in self.items:
                 icon.setVisible(text in icon.championName)
 
-        self.scrollWidget.repaint()
+        self.championsShowLayout.invalidate()
+        self.scrollWidget.update()
 
     def __getChampionIdsByAlias(self, alias):
         if ChampionAlias.isAvailable():
@@ -156,6 +157,9 @@ class ChampionsSelectWidget(QWidget):
     def __showAllChampions(self):
         for icon in self.items:
             icon.setVisible(True)
+
+        self.championsShowLayout.invalidate()
+        self.scrollWidget.update()
 
 
 class MultiChampionSelectWidget(QWidget):
@@ -174,7 +178,10 @@ class MultiChampionSelectWidget(QWidget):
 
     def __initWidget(self):
         for id in self.selected:
-            name = connector.manager.getChampionNameById(id)
+            if id not in self.champions:
+                continue
+
+            name = self.champions[id][0]
             icon = self.champions[id][1]
 
             self.itemsDraggableWidget.addItem(icon, name, id)

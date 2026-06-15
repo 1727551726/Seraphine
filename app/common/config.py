@@ -129,6 +129,12 @@ class Config(QConfig):
     autoAcceptChampTrade = ConfigItem(
         "Functions", "AutoAcceptChampTrade", False, BoolValidator())
 
+    # 大乱斗自动抢选
+    enableAramAutoSwap = ConfigItem(
+        "Functions", "EnableAramAutoSwap", False, BoolValidator())
+    aramAutoSwapChampions = ConfigItem(
+        "Functions", "AramAutoSwapChampions", [])
+
     lastNoticeSha = ConfigItem("Other", "LastNoticeSha", "")
 
     enableCloseToTray = ConfigItem(

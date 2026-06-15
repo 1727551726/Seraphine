@@ -8,14 +8,15 @@ import py7zr
 
 from PyQt5.QtCore import Qt, pyqtSignal, QUrl
 from PyQt5.QtWidgets import (QPushButton, QVBoxLayout, QWidget, QLabel, QFileDialog,
-                             QHBoxLayout)
+                             QHBoxLayout, QGridLayout)
 from PyQt5.QtGui import QFont, QPixmap
 
 from app.common.qfluentwidgets import (MessageBoxBase, SmoothScrollArea,
                                        BodyLabel, TextEdit, TitleLabel,
                                        ProgressBar, PrimaryPushButton, ComboBox,
                                        PipsScrollButtonDisplayMode, HorizontalPipsPager,
-                                       FlyoutViewBase, PushButton)
+                                       FlyoutViewBase, PushButton,
+                                       SwitchButton, IndicatorPosition)
 
 from app.common.config import VERSION, cfg, LOCAL_PATH, BETA
 from app.common.util import getLolClientPidSlowly
@@ -462,3 +463,71 @@ class ChangeDpiMessageBox(MessageBoxBase):
     def __onYesButtonClicked(self):
         signalBus.terminateListeners.emit()
         sys.exit()
+
+
+class AramBenchMsgBox(MessageBoxBase):
+    """大乱斗备选池弹窗"""
+
+    def __init__(self, benchChampions: list, enabled: bool, parent=None):
+        super().__init__(parent)
+
+        self.myYesButton = PrimaryPushButton(self.tr('确定'), self.buttonGroup)
+
+        self.titleLabel = TitleLabel(self.tr("大乱斗备选池"))
+
+        # 备选池英雄展示区域
+        self.benchWidget = QWidget()
+        self.benchLayout = QGridLayout(self.benchWidget)
+        self.benchLayout.setSpacing(8)
+
+        # 自动抢选开关
+        self.switchWidget = QWidget()
+        self.switchLayout = QHBoxLayout(self.switchWidget)
+        self.enableLabel = QLabel(self.tr("自动抢选:"))
+        self.switchButton = SwitchButton(indicatorPos=IndicatorPosition.RIGHT)
+        self.switchButton.setChecked(enabled)
+
+        # 当前状态显示
+        self.statusLabel = QLabel(self.tr("等待英雄上架..."))
+
+        self.__initWidget(benchChampions)
+        self.__initLayout()
+
+    def __initWidget(self, benchChampions):
+        self.yesButton.setVisible(False)
+        self.cancelButton.setVisible(False)
+
+        # 显示备选池英雄图标（5列网格）
+        for i, champ in enumerate(benchChampions):
+            row = i // 5
+            col = i % 5
+            championId = champ.get('championId', 0)
+            if championId > 0:
+                icon = RoundedLabel(championId, 48)
+                self.benchLayout.addWidget(icon, row, col, Qt.AlignCenter)
+
+        self.statusLabel.setStyleSheet("color: gray; font-size: 12px;")
+
+        self.myYesButton.clicked.connect(self.accept)
+
+        # 连接开关信号
+        self.switchButton.checkedChanged.connect(self.__onSwitchChanged)
+
+    def __initLayout(self):
+        self.viewLayout.addWidget(self.titleLabel)
+        self.viewLayout.addWidget(self.benchWidget)
+        self.viewLayout.addWidget(self.statusLabel)
+
+        self.switchLayout.addWidget(self.enableLabel)
+        self.switchLayout.addWidget(self.switchButton)
+        self.switchLayout.addStretch()
+        self.viewLayout.addWidget(self.switchWidget)
+
+        self.buttonLayout.addWidget(self.myYesButton)
+
+    def __onSwitchChanged(self, checked):
+        from app.common.config import qconfig
+        qconfig.set(cfg.enableAramAutoSwap, checked)
+
+    def updateStatus(self, text):
+        self.statusLabel.setText(text)

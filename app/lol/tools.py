@@ -1387,6 +1387,16 @@ class ChampionSelection:
         self.__init__()
 
 
+class AramBenchState:
+    """大乱斗备选席状态跟踪器"""
+    lastBenchChampions = set()  # 上次的 bench 英雄ID集合
+    swapped = False             # 本轮是否已执行过抢选
+
+    def reset(self):
+        self.lastBenchChampions = set()
+        self.swapped = False
+
+
 async def autoSwap(data, selection: ChampionSelection):
     """
     选用顺序交换请求发生时，自动接受
@@ -1767,6 +1777,76 @@ async def rollAndSwapBack():
 
     await connector.reroll()
     await connector.benchSwap(championId)
+
+
+async def autoBenchSwap(data, benchState: AramBenchState):
+    """
+    大乱斗自动抢选备选英雄
+
+    触发条件：
+    1. enableAramAutoSwap 配置开启
+    2. session.benchEnabled == True（大乱斗模式）
+    3. 本轮尚未执行过抢选（benchState.swapped == False）
+    4. 备选池有新英雄上架（差异检测）
+    5. 新上架的英雄中有用户期望的英雄
+    """
+    from ..common.logger import logger
+
+    if not cfg.get(cfg.enableAramAutoSwap):
+        return False
+
+    if not data.get('benchEnabled', False):
+        return False
+
+    if benchState.swapped:
+        return False
+
+    # 获取当前备选池英雄ID集合
+    benchChampions = data.get('benchChampions', [])
+    currentBench = set(c['championId'] for c in benchChampions)
+
+    # 差异检测：新上架的英雄
+    newChampions = currentBench - benchState.lastBenchChampions
+    benchState.lastBenchChampions = currentBench
+
+    if not newChampions:
+        return False
+
+    # 获取用户期望英雄列表
+    desiredChampions = cfg.get(cfg.aramAutoSwapChampions)
+    if not desiredChampions:
+        return False
+
+    # 按优先级匹配：遍历期望列表，找第一个在新上架中的英雄
+    targetChampionId = None
+    for championId in desiredChampions:
+        if championId in newChampions:
+            targetChampionId = championId
+            break
+
+    if targetChampionId is None:
+        return False
+
+    # 获取当前正在使用的英雄，如果已经是目标英雄则跳过
+    currentChampionId = None
+    localPlayerCellId = data.get('localPlayerCellId')
+    for player in data.get('myTeam', []):
+        if player.get('cellId') == localPlayerCellId:
+            currentChampionId = player.get('championId')
+            break
+
+    if currentChampionId == targetChampionId:
+        benchState.swapped = True
+        return True
+
+    # 立即执行抢选
+    try:
+        await connector.benchSwap(targetChampionId)
+        benchState.swapped = True
+        return True
+    except Exception as e:
+        logger.error(f"大乱斗自动抢选失败: {e}")
+        return False
 
 
 async def fixLCUWindowViaExe():

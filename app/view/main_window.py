@@ -37,7 +37,7 @@ from app.common.logger import logger
 from app.common.signals import signalBus
 from app.components.message_box import (UpdateMessageBox, NoticeMessageBox,
                                         WaitingForLolMessageBox, ExceptionMessageBox,
-                                        ChangeDpiMessageBox)
+                                        ChangeDpiMessageBox, AramBenchMsgBox)
 from app.lol.exceptions import (SummonerGamesNotFound, RetryMaximumAttempts,
                                 SummonerNotFound, SummonerNotInGame, SummonerRankInfoNotFound)
 from app.lol.listener import (LolProcessExistenceListener, StoppableThread)
@@ -45,7 +45,8 @@ from app.lol.connector import connector
 from app.lol.tools import (parseAllyGameInfo, parseGameInfoByGameflowSession,
                            getAllyOrderByGameRole, getTeamColor, autoBan, autoPick,
                            autoComplete, autoSwap, autoTrade, ChampionSelection,
-                           SERVERS_NAME, SERVERS_SUBSET, showOpggBuild, autoShow)
+                           SERVERS_NAME, SERVERS_SUBSET, showOpggBuild, autoShow,
+                           autoBenchSwap, AramBenchState)
 from app.lol.aram import AramBuff
 from app.lol.champions import ChampionAlias
 from app.lol.opgg import opgg
@@ -99,6 +100,8 @@ class MainWindow(FluentWindow):
         self.isTrayExit = False
         self.tasklistEnabled = True
         self.championSelection = ChampionSelection()
+        self.aramBenchState = AramBenchState()
+        self.aramBenchMsgBox = None
 
         self.lastTipsTime = time.time()
         self.lastTipsType = None
@@ -857,7 +860,18 @@ class MainWindow(FluentWindow):
     # 进入英雄选择界面时触发
     async def __onChampionSelectBegin(self):
         self.championSelection.reset()
+        self.aramBenchState.reset()
         session = await connector.getChampSelectSession()
+
+        # 大乱斗模式：弹出备选池弹窗
+        if session.get('benchEnabled') and cfg.get(cfg.enableAramAutoSwap):
+            benchChampions = session.get('benchChampions', [])
+            if benchChampions:
+                self.aramBenchMsgBox = AramBenchMsgBox(
+                    benchChampions,
+                    cfg.get(cfg.enableAramAutoSwap),
+                    self.window())
+                self.aramBenchMsgBox.show()
 
         if cfg.get(cfg.autoShowOpgg):
             # 判断当前是否为召唤师峡谷模式，只有召唤师峡谷才自动弹出
@@ -885,6 +899,16 @@ class MainWindow(FluentWindow):
     @asyncSlot(dict)
     async def __onChampSelectChanged(self, data):
         data = data['data']
+
+        # 大乱斗自动抢选（在所有阶段之前检测）
+        swapped = await autoBenchSwap(data, self.aramBenchState)
+        if swapped and self.aramBenchMsgBox:
+            self.aramBenchMsgBox.updateStatus(self.tr("已抢选成功！"))
+
+        # 更新弹窗备选池显示
+        if self.aramBenchMsgBox and data.get('benchEnabled'):
+            benchChampions = data.get('benchChampions', [])
+            # 可以在这里更新弹窗中的备选池显示
 
         phase = {
             'PLANNING': [autoShow],

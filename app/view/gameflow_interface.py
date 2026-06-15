@@ -15,7 +15,7 @@ from app.common.qfluentwidgets import (SettingCardGroup, ExpandLayout,
                                        SwitchSettingCard, setCustomStyleSheet,
                                        TransparentToolButton, FluentIcon,
                                        ToolTipFilter, ToolTipPosition,
-                                       PushButton)
+                                       PushButton, InfoBar, InfoBarPosition)
 from app.common.style_sheet import StyleSheet
 from app.components.champion_icon_widget import RoundIcon
 from app.components.message_box import MultiChampionSelectMsgBox
@@ -654,14 +654,29 @@ class AutoSelectChampionCard(ExpandGroupSettingCard):
             if len(selected) == 0:
                 continue
 
+            selected = [id for id in selected if id in self.champions]
+            if len(selected) == 0:
+                qconfig.set(configItem, selected)
+                continue
+
             champions.updateChampions(
                 [self.champions[id][1] for id in selected])
 
         return self.champions
 
     def __onButtonClicked(self, type: str):
+        if not self.champions:
+            InfoBar.warning(
+                self.tr("提示"),
+                self.tr("请先启动英雄联盟客户端"),
+                duration=3000,
+                parent=self.window(),
+                position=InfoBarPosition.TOP)
+            return
+
         configItem: ConfigItem = getattr(self, f"{type}ChampionsConfigItem")
         selected = qconfig.get(configItem)
+        selected = [id for id in selected if id in self.champions]
 
         box = MultiChampionSelectMsgBox(
             self.champions, selected, self.window())
@@ -675,7 +690,7 @@ class AutoSelectChampionCard(ExpandGroupSettingCard):
 
         card: ChampionsCard = getattr(self, f"{type}Champions")
         card.updateChampions(
-            [self.champions[id][1] for id in champions])
+            [self.champions[id][1] for id in champions if id in self.champions])
 
         if type != 'default':
             return
@@ -932,14 +947,29 @@ class AutoBanChampionCard(ExpandGroupSettingCard):
             if len(selected) == 0:
                 continue
 
+            selected = [id for id in selected if id in self.champions]
+            if len(selected) == 0:
+                qconfig.set(configItem, selected)
+                continue
+
             champions.updateChampions(
                 [self.champions[id][1] for id in selected])
 
         return self.champions
 
     def __onButtonClicked(self, type: str):
+        if not self.champions:
+            InfoBar.warning(
+                self.tr("提示"),
+                self.tr("请先启动英雄联盟客户端"),
+                duration=3000,
+                parent=self.window(),
+                position=InfoBarPosition.TOP)
+            return
+
         configItem: ConfigItem = getattr(self, f"{type}ChampionsConfigItem")
         selected = qconfig.get(configItem)
+        selected = [id for id in selected if id in self.champions]
 
         box = MultiChampionSelectMsgBox(
             self.champions, selected, self.window())
@@ -953,7 +983,7 @@ class AutoBanChampionCard(ExpandGroupSettingCard):
 
         card: ChampionsCard = getattr(self, f"{type}Champions")
         card.updateChampions(
-            [self.champions[id][1] for id in champions])
+            [self.champions[id][1] for id in champions if id in self.champions])
 
         if type != 'default':
             return
@@ -1026,6 +1056,156 @@ class AutoBanChampionCard(ExpandGroupSettingCard):
         """
 
         setCustomStyleSheet(self.delaySpinBox, light, dark)
+
+
+class AramAutoSwapCard(ExpandGroupSettingCard):
+    """大乱斗自动抢选设置卡片"""
+
+    def __init__(self, title, content=None,
+                 enableConfigItem: ConfigItem = None,
+                 championsConfigItem: ConfigItem = None,
+                 parent=None):
+        super().__init__(Icon.GAMEFLOW, title, content, parent)
+
+        self.champions = {}
+        self.championsConfigItem = championsConfigItem
+        self.enableConfigItem = enableConfigItem
+
+        self.statusLabel = QLabel()
+
+        self.championsWidget = QWidget(self.view)
+        self.championsLayout = QHBoxLayout(self.championsWidget)
+        self.championsCard = ChampionsCard()
+        self.selectButton = PushButton(self.tr("选择"))
+
+        self.switchWidget = QWidget(self.view)
+        self.switchLayout = QHBoxLayout(self.switchWidget)
+        self.enableLabel = QLabel(self.tr("启用:"))
+        self.switchButton = SwitchButton(indicatorPos=IndicatorPosition.RIGHT)
+
+        self.__initWidget()
+        self.__initLayout()
+
+    def __initWidget(self):
+        enabled = qconfig.get(self.enableConfigItem)
+        selected = qconfig.get(self.championsConfigItem)
+
+        self.selectButton.setMinimumWidth(100)
+        self.selectButton.clicked.connect(self.__onSelectButtonClicked)
+
+        self.switchButton.setChecked(enabled)
+        self.switchButton.setOnText(self.tr("开"))
+        self.switchButton.setOffText(self.tr("关"))
+        self.switchButton.checkedChanged.connect(
+            self.__onSwitchButtonCheckedChanged)
+
+        self.championsCard.clearRequested.connect(
+            lambda: self.__onChampionsChanged([]))
+
+        self.__updateStatusLabel()
+
+    def __initLayout(self):
+        self.addWidget(self.statusLabel)
+
+        self.championsLayout.setContentsMargins(48, 18, 44, 18)
+        self.championsLayout.setSpacing(19)
+        self.championsLayout.addWidget(
+            QLabel(self.tr("期望英雄:")), alignment=Qt.AlignLeft)
+        self.championsLayout.addWidget(
+            self.championsCard, alignment=Qt.AlignHCenter)
+        self.championsLayout.addWidget(
+            self.selectButton, alignment=Qt.AlignRight)
+        self.championsLayout.setSizeConstraint(QHBoxLayout.SetMinimumSize)
+
+        self.switchLayout.setContentsMargins(48, 18, 44, 18)
+        self.switchLayout.setSpacing(19)
+        self.switchLayout.addWidget(
+            self.enableLabel, alignment=Qt.AlignLeft)
+        self.switchLayout.addWidget(
+            self.switchButton, alignment=Qt.AlignRight)
+        self.switchLayout.setSizeConstraint(QHBoxLayout.SetMinimumSize)
+
+        self.viewLayout.setSpacing(0)
+        self.viewLayout.setContentsMargins(0, 0, 0, 0)
+        self.addGroupWidget(self.championsWidget)
+        self.addGroupWidget(self.switchWidget)
+
+    async def initChampionList(self, champions: dict = None):
+        if champions:
+            self.champions = champions
+        else:
+            self.champions = {
+                i: [name, await connector.getChampionIcon(i)]
+                for i, name in connector.manager.getChampions().items()
+                if i != -1
+            }
+
+        selected = qconfig.get(self.championsConfigItem)
+
+        if not (type(selected) is list and all(type(s) is int for s in selected)):
+            selected = []
+            qconfig.set(self.championsConfigItem, selected)
+
+        selected = [id for id in selected if id in self.champions]
+        if len(selected) > 0:
+            self.championsCard.updateChampions(
+                [self.champions[id][1] for id in selected])
+
+        return self.champions
+
+    def __onSelectButtonClicked(self):
+        if not self.champions:
+            InfoBar.warning(
+                self.tr("提示"),
+                self.tr("请先启动英雄联盟客户端"),
+                duration=3000,
+                parent=self.window(),
+                position=InfoBarPosition.TOP)
+            return
+
+        selected = qconfig.get(self.championsConfigItem)
+        selected = [id for id in selected if id in self.champions]
+
+        # 确保 ChampionAlias 数据已加载
+        from app.lol.champions import ChampionAlias
+        if not ChampionAlias.isAvailable():
+            import asyncio
+            asyncio.ensure_future(self.__openSelectDialogAfterAliasLoad(selected))
+            return
+
+        self.__openSelectDialog(selected)
+
+    async def __openSelectDialogAfterAliasLoad(self, selected):
+        from app.lol.champions import ChampionAlias
+        await ChampionAlias.checkAndUpdate()
+        self.__openSelectDialog(selected)
+
+    def __openSelectDialog(self, selected):
+        box = MultiChampionSelectMsgBox(
+            self.champions, selected, self.window())
+        box.completed.connect(self.__onChampionsChanged)
+        box.exec()
+
+    def __onChampionsChanged(self, champions: list):
+        qconfig.set(self.championsConfigItem, champions)
+
+        self.championsCard.updateChampions(
+            [self.champions[id][1] for id in champions if id in self.champions])
+
+        if len(champions) == 0:
+            self.switchButton.setChecked(False)
+            self.switchButton.setEnabled(False)
+        else:
+            self.switchButton.setEnabled(True)
+
+    def __onSwitchButtonCheckedChanged(self, checked):
+        qconfig.set(self.enableConfigItem, checked)
+        self.__updateStatusLabel()
+
+    def __updateStatusLabel(self):
+        checked = self.switchButton.isChecked()
+        text = self.tr("已开启") if checked else self.tr("已关闭")
+        self.statusLabel.setText(text)
 
 
 class ChampionsCard(QFrame):
@@ -1148,6 +1328,12 @@ class GameflowInterface(SeraphineInterface):
             cfg.pretentBan,
             cfg.autoBanDelay,
             self.bpGroup)
+        self.aramAutoSwapCard = AramAutoSwapCard(
+            self.tr("大乱斗自动抢选"),
+            self.tr("大乱斗模式下自动抢选备选池中的期望英雄"),
+            cfg.enableAramAutoSwap,
+            cfg.aramAutoSwapChampions,
+            self.bpGroup)
 
         self.playAgainTimer = QTimer(self)
         self.playAgainTimer.setSingleShot(True)
@@ -1187,6 +1373,7 @@ class GameflowInterface(SeraphineInterface):
         self.bpGroup.addSettingCard(self.autoAcceptSwapingCard)
         self.bpGroup.addSettingCard(self.autoSelectChampionCard)
         self.bpGroup.addSettingCard(self.autoBanChampionsCard)
+        self.bpGroup.addSettingCard(self.aramAutoSwapCard)
 
         self.expandLayout.setSpacing(30)
         self.expandLayout.setContentsMargins(36, 0, 36, 0)
@@ -1196,6 +1383,10 @@ class GameflowInterface(SeraphineInterface):
     async def initChampionList(self):
         champions = await self.autoSelectChampionCard.initChampionList()
         await self.autoBanChampionsCard.initChampionList(champions)
+        try:
+            await self.aramAutoSwapCard.initChampionList(champions)
+        except Exception as e:
+            logger.error(f"AramAutoSwapCard initChampionList failed: {e}")
         return champions
 
     def __connectSignalToSlot(self):
