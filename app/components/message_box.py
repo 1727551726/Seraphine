@@ -25,7 +25,7 @@ from app.common.update import runUpdater
 from app.lol.connector import connector
 from app.components.multi_champion_select import MultiChampionSelectWidget
 from app.components.multi_lol_path_setting import PathDraggableWidget
-from app.components.champion_icon_widget import RoundedLabel
+from app.components.champion_icon_widget import RoundedLabel, RoundIcon
 
 
 class UpdateMessageBox(MessageBoxBase):
@@ -501,9 +501,9 @@ class AramBenchMsgBox(MessageBoxBase):
         for i, champ in enumerate(benchChampions):
             row = i // 5
             col = i % 5
-            championId = champ.get('championId', 0)
-            if championId > 0:
-                icon = RoundedLabel(championId, 48)
+            iconPath = champ.get('icon')
+            if iconPath:
+                icon = RoundIcon(iconPath, 48, 2, 2)
                 self.benchLayout.addWidget(icon, row, col, Qt.AlignCenter)
 
         self.statusLabel.setStyleSheet("color: gray; font-size: 12px;")
@@ -531,3 +531,21 @@ class AramBenchMsgBox(MessageBoxBase):
 
     def updateStatus(self, text):
         self.statusLabel.setText(text)
+
+    def updateBenchChampions(self, benchChampions: list):
+        """更新备选池英雄显示"""
+        # 清除现有的英雄图标
+        while self.benchLayout.count():
+            item = self.benchLayout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        # 重新添加英雄图标（5列网格）
+        for i, champ in enumerate(benchChampions):
+            row = i // 5
+            col = i % 5
+            iconPath = champ.get('icon')
+            if iconPath:
+                icon = RoundIcon(iconPath, 48, 2, 2)
+                self.benchLayout.addWidget(icon, row, col, Qt.AlignCenter)

@@ -861,17 +861,13 @@ class MainWindow(FluentWindow):
     async def __onChampionSelectBegin(self):
         self.championSelection.reset()
         self.aramBenchState.reset()
-        session = await connector.getChampSelectSession()
 
-        # 大乱斗模式：弹出备选池弹窗
-        if session.get('benchEnabled') and cfg.get(cfg.enableAramAutoSwap):
-            benchChampions = session.get('benchChampions', [])
-            if benchChampions:
-                self.aramBenchMsgBox = AramBenchMsgBox(
-                    benchChampions,
-                    cfg.get(cfg.enableAramAutoSwap),
-                    self.window())
-                self.aramBenchMsgBox.show()
+        # 清理旧的备选池弹窗
+        if self.aramBenchMsgBox:
+            self.aramBenchMsgBox.close()
+            self.aramBenchMsgBox = None
+
+        session = await connector.getChampSelectSession()
 
         if cfg.get(cfg.autoShowOpgg):
             # 判断当前是否为召唤师峡谷模式，只有召唤师峡谷才自动弹出
@@ -905,10 +901,39 @@ class MainWindow(FluentWindow):
         if swapped and self.aramBenchMsgBox:
             self.aramBenchMsgBox.updateStatus(self.tr("已抢选成功！"))
 
-        # 更新弹窗备选池显示
-        if self.aramBenchMsgBox and data.get('benchEnabled'):
+        # 大乱斗模式：检测并弹出备选池弹窗
+        if data.get('benchEnabled') and cfg.get(cfg.enableAramAutoSwap):
             benchChampions = data.get('benchChampions', [])
-            # 可以在这里更新弹窗中的备选池显示
+            if benchChampions and not self.aramBenchMsgBox:
+                # 获取英雄图标路径
+                benchChampionsWithIcons = []
+                for champ in benchChampions:
+                    championId = champ.get('championId', 0)
+                    if championId > 0:
+                        icon = await connector.getChampionIcon(championId)
+                        benchChampionsWithIcons.append({
+                            'championId': championId,
+                            'icon': icon
+                        })
+                if benchChampionsWithIcons:
+                    self.aramBenchMsgBox = AramBenchMsgBox(
+                        benchChampionsWithIcons,
+                        cfg.get(cfg.enableAramAutoSwap),
+                        self.window())
+                    self.aramBenchMsgBox.show()
+            elif self.aramBenchMsgBox and benchChampions:
+                # 获取英雄图标路径并更新弹窗
+                benchChampionsWithIcons = []
+                for champ in benchChampions:
+                    championId = champ.get('championId', 0)
+                    if championId > 0:
+                        icon = await connector.getChampionIcon(championId)
+                        benchChampionsWithIcons.append({
+                            'championId': championId,
+                            'icon': icon
+                        })
+                if benchChampionsWithIcons:
+                    self.aramBenchMsgBox.updateBenchChampions(benchChampionsWithIcons)
 
         phase = {
             'PLANNING': [autoShow],
