@@ -27,6 +27,7 @@ from app.view.game_info_interface import GameInfoInterface
 from app.view.auxiliary_interface import AuxiliaryInterface
 from app.view.gameflow_interface import GameflowInterface
 from app.view.opgg_window import OpggWindow
+from app.view.aram_bench_window import AramBenchWindow
 from app.common.util import (github, getLolClientPid, getTasklistPath,
                              getLolClientPidSlowly, getLoLPathByRegistry)
 from app.components.avatar_widget import NavigationAvatarWidget
@@ -37,7 +38,7 @@ from app.common.logger import logger
 from app.common.signals import signalBus
 from app.components.message_box import (UpdateMessageBox, NoticeMessageBox,
                                         WaitingForLolMessageBox, ExceptionMessageBox,
-                                        ChangeDpiMessageBox, AramBenchMsgBox)
+                                        ChangeDpiMessageBox)
 from app.lol.exceptions import (SummonerGamesNotFound, RetryMaximumAttempts,
                                 SummonerNotFound, SummonerNotInGame, SummonerRankInfoNotFound)
 from app.lol.listener import (LolProcessExistenceListener, StoppableThread)
@@ -101,7 +102,6 @@ class MainWindow(FluentWindow):
         self.tasklistEnabled = True
         self.championSelection = ChampionSelection()
         self.aramBenchState = AramBenchState()
-        self.aramBenchMsgBox = None
 
         self.lastTipsTime = time.time()
         self.lastTipsType = None
@@ -115,6 +115,7 @@ class MainWindow(FluentWindow):
         self.splashScreen.finish()
 
         self.opggWindow = OpggWindow()
+        self.aramBenchWindow = AramBenchWindow()
 
         logger.critical("Seraphine initialized", TAG)
 
@@ -169,6 +170,16 @@ class MainWindow(FluentWindow):
             self.tr("Auxiliary Functions"), pos)
 
         pos = NavigationItemPosition.BOTTOM
+
+        self.navigationInterface.addItem(
+            routeKey='AramBench',
+            icon=Icon.GAMEFLOW,
+            text="ARAM",
+            onClick=self.showAramBenchWindow,
+            selectable=False,
+            position=pos,
+            tooltip=self.tr("大乱斗备选池")
+        )
 
         self.navigationInterface.addItem(
             routeKey='Opgg',
@@ -862,10 +873,8 @@ class MainWindow(FluentWindow):
         self.championSelection.reset()
         self.aramBenchState.reset()
 
-        # 清理旧的备选池弹窗
-        if self.aramBenchMsgBox:
-            self.aramBenchMsgBox.close()
-            self.aramBenchMsgBox = None
+        # 清空备选池窗口
+        self.aramBenchWindow.clearBench()
 
         session = await connector.getChampSelectSession()
 
@@ -898,13 +907,13 @@ class MainWindow(FluentWindow):
 
         # 大乱斗自动抢选（在所有阶段之前检测）
         swapped = await autoBenchSwap(data, self.aramBenchState)
-        if swapped and self.aramBenchMsgBox:
-            self.aramBenchMsgBox.updateStatus(self.tr("已抢选成功！"))
+        if swapped:
+            self.aramBenchWindow.updateStatus(self.tr("已抢选成功！"))
 
-        # 大乱斗模式：检测并弹出备选池弹窗
+        # 大乱斗模式：更新备选池窗口
         if data.get('benchEnabled') and cfg.get(cfg.enableAramAutoSwap):
             benchChampions = data.get('benchChampions', [])
-            if benchChampions and not self.aramBenchMsgBox:
+            if benchChampions:
                 # 获取英雄图标路径
                 benchChampionsWithIcons = []
                 for champ in benchChampions:
@@ -916,24 +925,7 @@ class MainWindow(FluentWindow):
                             'icon': icon
                         })
                 if benchChampionsWithIcons:
-                    self.aramBenchMsgBox = AramBenchMsgBox(
-                        benchChampionsWithIcons,
-                        cfg.get(cfg.enableAramAutoSwap),
-                        self.window())
-                    self.aramBenchMsgBox.show()
-            elif self.aramBenchMsgBox and benchChampions:
-                # 获取英雄图标路径并更新弹窗
-                benchChampionsWithIcons = []
-                for champ in benchChampions:
-                    championId = champ.get('championId', 0)
-                    if championId > 0:
-                        icon = await connector.getChampionIcon(championId)
-                        benchChampionsWithIcons.append({
-                            'championId': championId,
-                            'icon': icon
-                        })
-                if benchChampionsWithIcons:
-                    self.aramBenchMsgBox.updateBenchChampions(benchChampionsWithIcons)
+                    self.aramBenchWindow.updateBenchChampions(benchChampionsWithIcons)
 
         phase = {
             'PLANNING': [autoShow],
@@ -1052,6 +1044,10 @@ class MainWindow(FluentWindow):
         self.searchInterface.waitingForDrawSelect(gameId)
         await self.searchInterface.updateGameDetailView(gameId, self.careerInterface.puuid)
 
+    def showAramBenchWindow(self):
+        self.aramBenchWindow.show()
+        self.aramBenchWindow.raise_()
+
     def showOpggWindow(self):
         self.opggWindow.show()
         self.opggWindow.raise_()
@@ -1066,6 +1062,7 @@ class MainWindow(FluentWindow):
         isMicaEnabled = cfg.get(cfg.micaEnabled)
         self.setMicaEffectEnabled(isMicaEnabled)
         self.opggWindow.setMicaEffectEnabled(isMicaEnabled)
+        self.aramBenchWindow.setMicaEffectEnabled(isMicaEnabled)
 
     @asyncSlot()
     async def __onFixLCUButtonClicked(self):
