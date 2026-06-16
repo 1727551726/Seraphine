@@ -753,6 +753,7 @@ class MainWindow(FluentWindow):
         if not cfg.get(cfg.enableCloseToTray) or self.isTrayExit:
             self.__terminateListeners()
             self.opggWindow.close()
+            self.aramBenchWindow.close()
 
             return super().closeEvent(a0)
         else:
@@ -926,6 +927,10 @@ class MainWindow(FluentWindow):
                         })
                 if benchChampionsWithIcons:
                     self.aramBenchWindow.updateBenchChampions(benchChampionsWithIcons)
+
+            # 更新倒计时
+            timer = data.get('timer', {})
+            self.aramBenchWindow.updateTimer(timer)
 
         phase = {
             'PLANNING': [autoShow],
