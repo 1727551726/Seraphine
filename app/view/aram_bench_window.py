@@ -1,11 +1,14 @@
 import os
 import asyncio
+import win32api
 from qasync import asyncSlot
-from PyQt5.QtGui import QColor, QPainter, QIcon, QPixmap, QCursor, QFont
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize, QRectF
+from PyQt5.QtGui import QColor, QPainter, QIcon, QPixmap, QCursor, QFont, QShowEvent
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize, QRect, QRectF
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QGridLayout, QSpacerItem, QSizePolicy, QFrame,
                              QProgressBar, QApplication)
+
+from app.common.util import getLolClientWindowPos
 
 from app.common.config import qconfig, cfg
 from app.common.logger import logger
@@ -126,6 +129,23 @@ class AramBenchWindow(OpggWindowBase):
         self.__initLayout()
         self.__connectSignalToSlot()
         self.__loadDesiredChampions()
+
+    def showEvent(self, a0: QShowEvent) -> None:
+        """显示时对齐客户端右下角"""
+        size: QSize = self.size()
+        pos = getLolClientWindowPos()
+
+        if not pos:
+            return super().showEvent(a0)
+
+        dpi = self.devicePixelRatioF()
+        # 右下角：x = 客户端右边界 - 窗口宽度, y = 客户端下边界 - 窗口高度
+        x = pos.right() - size.width() * dpi
+        y = pos.bottom() - size.height() * dpi
+        rect = QRect(int(x / dpi), int(y / dpi), size.width(), size.height())
+
+        self.setGeometry(rect)
+        return super().showEvent(a0)
 
     def __initWindow(self):
         self.setFixedSize(360, 480)

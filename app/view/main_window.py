@@ -895,6 +895,11 @@ class MainWindow(FluentWindow):
             if isSummonersRift:
                 self.opggWindow.show()
 
+        # 大乱斗模式：自动弹出备选池窗口
+        if session.get('benchEnabled') and cfg.get(cfg.enableAramAutoSwap):
+            self.aramBenchWindow.show()
+            self.aramBenchWindow.raise_()
+
         currentSummonerId = self.currentSummoner['summonerId']
         info = await parseAllyGameInfo(session, currentSummonerId, useSGP=True)
         self.gameInfoInterface.updateAllySummoners(info)
