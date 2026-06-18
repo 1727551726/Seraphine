@@ -897,6 +897,7 @@ class MainWindow(FluentWindow):
 
         # 大乱斗模式：自动弹出备选池窗口
         if session.get('benchEnabled') and cfg.get(cfg.enableAramAutoSwap):
+            self.aramBenchWindow.adjustPosition()
             self.aramBenchWindow.show()
             self.aramBenchWindow.raise_()
 
@@ -1055,6 +1056,7 @@ class MainWindow(FluentWindow):
         await self.searchInterface.updateGameDetailView(gameId, self.careerInterface.puuid)
 
     def showAramBenchWindow(self):
+        self.aramBenchWindow.adjustPosition()
         self.aramBenchWindow.show()
         self.aramBenchWindow.raise_()
 

@@ -130,21 +130,25 @@ class AramBenchWindow(OpggWindowBase):
         self.__connectSignalToSlot()
         self.__loadDesiredChampions()
 
-    def showEvent(self, a0: QShowEvent) -> None:
-        """显示时对齐客户端右下角"""
+    def adjustPosition(self):
+        """调整窗口位置到客户端右下角"""
         size: QSize = self.size()
         pos = getLolClientWindowPos()
 
         if not pos:
-            return super().showEvent(a0)
+            return
 
         dpi = self.devicePixelRatioF()
         # 右下角：x = 客户端右边界 - 窗口宽度, y = 客户端下边界 - 窗口高度
-        x = pos.right() - size.width() * dpi
+        x = pos.right() * dpi
         y = pos.bottom() - size.height() * dpi
         rect = QRect(int(x / dpi), int(y / dpi), size.width(), size.height())
 
         self.setGeometry(rect)
+
+    def showEvent(self, a0: QShowEvent) -> None:
+        """显示时对齐客户端右下角"""
+        self.adjustPosition()
         return super().showEvent(a0)
 
     def __initWindow(self):
