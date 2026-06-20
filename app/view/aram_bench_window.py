@@ -5,22 +5,39 @@ from qasync import asyncSlot
 from PyQt5.QtGui import QColor, QPainter, QIcon, QPixmap, QCursor, QFont, QShowEvent
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize, QRect, QRectF
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                             QGridLayout, QSpacerItem, QSizePolicy, QFrame,
-                             QProgressBar, QApplication)
+                             QGridLayout, QSpacerItem, QSizePolicy, QFrame)
 
 from app.common.util import getLolClientWindowPos
 
 from app.common.config import qconfig, cfg
 from app.common.logger import logger
 from app.common.style_sheet import StyleSheet
-from app.common.qfluentwidgets import (FramelessWindow, isDarkTheme, BackgroundAnimationWidget,
+from app.common.qfluentwidgets import (FramelessWindow, BackgroundAnimationWidget,
                                        FluentTitleBar, BodyLabel, SwitchButton, IndicatorPosition,
-                                       PushButton)
+                                       PushButton, ProgressBar)
 from app.lol.connector import connector
 from app.components.champion_icon_widget import RoundIcon
 from app.view.opgg_window import OpggWindowBase
 
 TAG = 'AramBenchWindow'
+
+
+class SmoothProgressBar(ProgressBar):
+    """平滑进度条（无背景、无边框）"""
+
+    def paintEvent(self, e):
+        painter = QPainter(self)
+        painter.setRenderHints(QPainter.Antialiasing)
+
+        if self.minimum() >= self.maximum():
+            return
+
+        # draw bar
+        r = self.height() / 2
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self.barColor())
+        w = int(self.val / (self.maximum() - self.minimum()) * self.width())
+        painter.drawRoundedRect(0, 0, w, self.height(), r, r)
 
 
 class ClickableChampionIcon(QFrame):
@@ -101,11 +118,11 @@ class AramBenchWindow(OpggWindowBase):
         self.benchLayout.setSpacing(8)
         self.benchLayout.setAlignment(Qt.AlignLeft | Qt.AlignTop)
 
-        # 倒计时进度条
+        # 倒计时进度条（使用 SmoothProgressBar，无背景实线）
         self.timerWidget = QWidget()
         self.timerLayout = QVBoxLayout(self.timerWidget)
         self.timerLabel = QLabel(self.tr("剩余时间: --"))
-        self.progressBar = QProgressBar()
+        self.progressBar = SmoothProgressBar()
         self.progressBar.setFixedHeight(8)
         self.progressBar.setTextVisible(False)
 
@@ -119,9 +136,10 @@ class AramBenchWindow(OpggWindowBase):
         # 当前状态显示
         self.statusLabel = QLabel(self.tr("等待英雄上架..."))
 
-        # 倒计时相关
-        self.timeLeft = 0
-        self.maxTime = 0
+        # 倒计时相关（精度 0.05 秒，内部值 = 秒数 * 20）
+        self.timeLeft = 0      # 内部值，单位 0.05 秒
+        self.maxTime = 0       # 内部值，单位 0.05 秒
+        self.TIMER_PRECISION = 20  # 每秒 20 次更新（50ms 间隔）
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.__onTimerTick)
 
@@ -164,18 +182,8 @@ class AramBenchWindow(OpggWindowBase):
         self.statusLabel.setStyleSheet("color: gray; font-size: 11px;")
         self.timerLabel.setStyleSheet("color: gray; font-size: 11px;")
 
-        # 设置进度条样式
-        self.progressBar.setStyleSheet("""
-            QProgressBar {
-                background-color: rgba(255, 255, 255, 30);
-                border-radius: 4px;
-                border: none;
-            }
-            QProgressBar::chunk {
-                background-color: #009688;
-                border-radius: 4px;
-            }
-        """)
+        # 设置进度条颜色
+        self.progressBar.setCustomBarColor("#009688", "#009688")
 
     def __initLayout(self):
         self.vBoxLayout.setContentsMargins(20, 40, 20, 20)
@@ -244,11 +252,13 @@ class AramBenchWindow(OpggWindowBase):
         self.__loadDesiredChampions()
 
     def __onTimerTick(self):
-        """定时器每秒触发，更新倒计时"""
+        """定时器每 50ms 触发，实现线性递减"""
         if self.timeLeft > 0:
             self.timeLeft -= 1
             self.progressBar.setValue(self.timeLeft)
-            self.timerLabel.setText(self.tr("剩余时间: {}秒").format(self.timeLeft))
+            # 显示实际秒数（向上取整，避免显示 0 但还有剩余时间）
+            seconds = (self.timeLeft + self.TIMER_PRECISION - 1) // self.TIMER_PRECISION
+            self.timerLabel.setText(self.tr("剩余时间: {}秒").format(seconds))
         else:
             self.timer.stop()
             self.timerLabel.setText(self.tr("剩余时间: 0秒"))
@@ -299,9 +309,9 @@ class AramBenchWindow(OpggWindowBase):
 
         self.timerWidget.setVisible(True)
 
-        # 获取剩余时间（毫秒转秒）
+        # 获取剩余时间（毫秒转内部值：秒 * TIMER_PRECISION）
         adjustedTime = timer.get('adjustedTimeLeftInPhase', 0)
-        self.timeLeft = int(adjustedTime / 1000)
+        self.timeLeft = int(adjustedTime / 1000 * self.TIMER_PRECISION)
 
         # 设置进度条最大值（首次设置时）
         if self.maxTime == 0 or self.timeLeft > self.maxTime:
@@ -309,11 +319,13 @@ class AramBenchWindow(OpggWindowBase):
             self.progressBar.setMaximum(self.maxTime)
 
         self.progressBar.setValue(self.timeLeft)
-        self.timerLabel.setText(self.tr("剩余时间: {}秒").format(self.timeLeft))
+        # 显示实际秒数（向上取整）
+        seconds = (self.timeLeft + self.TIMER_PRECISION - 1) // self.TIMER_PRECISION
+        self.timerLabel.setText(self.tr("剩余时间: {}秒").format(seconds))
 
-        # 启动定时器
+        # 启动定时器（50ms 间隔实现线性递减）
         if not self.timer.isActive():
-            self.timer.start(1000)
+            self.timer.start(50)
 
     def updateStatus(self, text):
         """更新状态显示"""
@@ -331,4 +343,5 @@ class AramBenchWindow(OpggWindowBase):
         self.timer.stop()
         self.timerLabel.setText(self.tr("剩余时间: --"))
         self.progressBar.setValue(0)
+        self.timeLeft = 0
         self.maxTime = 0
