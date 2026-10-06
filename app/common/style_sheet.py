@@ -30,6 +30,7 @@ class StyleSheet(StyleSheetBase, Enum):
     DRAGGABLE_WIDGET = 'draggable_widget'
     CHAMPIONS_SELECT_WIDGET = 'champions_select_widget'
     TRANSPARENT_BUTTON = 'transparent_button'
+    DAMAGE_PANEL_WINDOW = 'damage_panel_window'
 
     def path(self, theme=Theme.AUTO):
         theme = qconfig.theme if theme == Theme.AUTO else theme

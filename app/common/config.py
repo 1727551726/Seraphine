@@ -169,6 +169,10 @@ class Config(QConfig):
     enableReserveGameinfo = ConfigItem(
         "Functions", "EnableReserveGameinfo", False, BoolValidator())
 
+    # 对局伤害面板（默认开启）
+    enableDamagePanel = ConfigItem(
+        "Functions", "EnableDamagePanel", True, BoolValidator())
+
     # 自动游戏流配置
     enableAutoHonor = ConfigItem(
         "AutoGameflow", "EnableAutoHonor", False, BoolValidator())

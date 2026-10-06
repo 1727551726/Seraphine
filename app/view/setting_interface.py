@@ -78,6 +78,12 @@ class SettingInterface(SeraphineInterface):
             cfg.enableReserveGameinfo
         )
 
+        self.damagePanelCard = SwitchSettingCard(
+            Icon.PERSON_BOARD, self.tr("对局伤害面板"),
+            self.tr("对局结束后自动在屏幕右上角弹出伤害面板"),
+            cfg.enableDamagePanel
+        )
+
         self.generalGroup = SettingCardGroup(self.tr("General"),
                                              self.scrollWidget)
 
@@ -256,6 +262,7 @@ class SettingInterface(SeraphineInterface):
         self.functionGroup.addSettingCard(self.autoClearGameinfoCard)
         self.functionGroup.addSettingCard(self.autoShowOpggCard)
         self.functionGroup.addSettingCard(self.gameInfoShowTierCard)
+        self.functionGroup.addSettingCard(self.damagePanelCard)
 
         self.generalGroup.addSettingCard(self.lolFolderCard)
         self.generalGroup.addSettingCard(self.enableStartLolWithApp)

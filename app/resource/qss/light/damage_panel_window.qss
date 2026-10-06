@@ -1,0 +1,61 @@
+/* 对局伤害面板（亮色）
+   配色规格：物理红棕 / 魔法蓝 / 真实白 —— 那三色是数据色，写在
+   app/components/damage_panel.py 的 DAMAGE_COLORS 里（自绘控件不吃 qss）。
+   注意亮色主题下真实伤害不是纯白，纯白压在这个底色上会直接消失。 */
+
+#subtitleLabel {
+    color: rgb(131, 131, 131);
+    font: 12px 'Segoe UI', 'Microsoft YaHei';
+}
+
+#legendText {
+    color: rgb(100, 100, 100);
+    font: 11px 'Segoe UI', 'Microsoft YaHei';
+}
+
+#sideLabel {
+    color: black;
+    font: bold 12px 'Microsoft YaHei', 'Segoe UI';
+}
+
+#teamTotalCaption {
+    color: rgb(131, 131, 131);
+    font: 12px 'Segoe UI', 'Microsoft YaHei';
+}
+
+#teamTotalValue {
+    color: black;
+    font: bold 13px 'Segoe UI', 'Microsoft YaHei';
+}
+
+#summonerNameLabel {
+    color: black;
+    font: bold 13px 'Microsoft YaHei', 'Segoe UI';
+}
+
+#championNameLabel {
+    color: rgb(131, 131, 131);
+    font: 11px 'Microsoft YaHei', 'Segoe UI';
+}
+
+#damageValueLabel {
+    color: black;
+    font: bold 13px 'Segoe UI', 'Microsoft YaHei';
+}
+
+#damagePctLabel {
+    color: rgb(131, 131, 131);
+    font: 11px 'Segoe UI', 'Microsoft YaHei';
+}
+
+/* 「我」那一行：整行中性 tint + 名字用主题色。
+   沿用 search_interface 里标记当前召唤师的做法（那边是
+   SummonerInfoBar[current=true]），行底色用中性色而不是主题色 tint。 */
+DamageRowWidget[current=true] {
+    background-color: rgba(233, 233, 233, 0.667);
+    border-radius: 6px;
+}
+
+DamageRowWidget[current=true] > QLabel#summonerNameLabel {
+    color: --ThemeColorPrimary;
+}

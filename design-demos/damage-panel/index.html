@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seraphine · 对局伤害面板（原型）</title>
+
+<!--
+  ============================================================================
+  Seraphine · 对局伤害面板（对局结束后弹出的独立弹窗）— HTML 高保真原型
+  ============================================================================
+
+  【这个文件是什么】
+  一个双击就能打开的 HTML 原型，用于确认「伤害面板」的视觉与信息结构。
+  深色 / 浅色两套主题并排展示，DOM 结构与 CSS 变量一一对应，可直接翻译成 PyQt。
+
+  【需求映射】
+    召唤师 ID     -> .sid（bold 13px）+ .tag（#TAG，辅助色）
+    英雄头像      -> .avatar（圆形，直径 32px，2px #785a28 金环）
+    伤害数据条    -> .bar（物理/魔法/真实三段堆叠），三段类名是 .part
+                     注意：别再引入叫 .seg 的规则 —— 历史上分段控件用过这个类名，
+                     和伤害条撞过一次名，会让每一段被套上 display:flex / flex:0 0 auto，
+                     整条直接渲染不出来。
+    降序排列      -> groupHTML() 内按 total 排序（不是手写顺序）
+    条右侧数据    -> .val（总量 bold + 团队占比）
+    承伤统计      -> 不做第二套渲染：玩家数据是 dealt / taken 两份，
+                     同一套渲染逻辑换索引即可；所有随视图变的文案
+                     （图例、团队合计名、单位）都收在 VIEWS 里，
+                     渲染函数里没有 if (view === 'taken')。
+    视图切换      -> TAB 方式：.tabs / .tab-item，复刻 qfluentwidgets Pivot。
+                     没有容器、没有胶囊，只有选中项底部一条 16×3 的主题色指示条，
+                     条目字号 18px（PivotItem 的 setFont(self, 18)）。
+                     两个主题面板共用同一个 view 状态，切换时一起重渲染。
+    「我」标签    -> 已移除（不再做角标/标签）
+    关闭方式      -> .dlg-close（标题行右上角 32×32 图标按钮，SVG 走 currentColor）
+    突出「我」    -> .row.is-me：整行主题色 tint + 召唤师 ID 用 --me-accent
+                     数据里用 me:true 标记，演示中放在「羊来啦 / 千珏」这一行；
+                     实机必须由 LCU 本地玩家（summonerId / cellId）判定，不要写死。
+                     注意 --me-accent 不是主题色原色：主题色直接当 13px 文字色
+                     只有 2.6:1（浅底）/ 3.6:1（深底），都不达 AA，故另给亮暗两个变体。
+
+  【设计 token 来源】（全部取自仓库现有规范，未凭空发明颜色）
+    - 主题色      : #009faa  === qfluentwidgets qconfig.themeColor 默认值
+    - 字体        : 'Segoe UI','Microsoft YaHei','PingFang SC'，基础 14px
+    - 卡片/面板   : 圆角 6px，1px 边框，半透明底
+    - 弹窗        : 圆角 8px；关闭按钮 5px（TransparentToolButton，纯图标无文字）
+    - 深色边框    : rgb(35,35,35)；亮色边框 rgba(0,0,0,.095)
+    - 深色文字    : white / rgb(200,200,200) / rgb(176,176,177)
+    - 亮色文字    : black / rgb(100,100,100) / rgb(131,131,131)
+    - 行 hover    : dark rgba(255,255,255,.084) / light rgba(233,233,233,.5)
+    - 英雄头像环  : rgb(120,90,40) === RoundIcon / RoundedLabel 默认 borderColor
+    - 进度条圆角  : height/2（全圆角）=== SmoothProgressBar 的 r = height/2
+    - 弹窗结构    : MessageBoxBase —— viewLayout 边距 24 / 间距 12，
+                    buttonGroup 固定高 81px、按钮等宽（addWidget(btn, 1)）
+    - 弹窗遮罩    : MaskDialogBase.setMaskColor(rgba(0,0,0,76)) → 29.8% 黑
+    - 弹窗阴影    : setShadowEffect(60, (0,10), rgba(0,0,0,50))
+
+  【状态色 / 数据色怎么来的（重要，别当成我编的）】
+    - 胜/负：cfg.winCardColor = #2839b01b、cfg.loseCardColor = #28d3190c
+      这是 Qt 的 #AARRGGBB，即 alpha=0x28(15.7%) 的绿/红。
+      本原型把该 alpha 原样用作 chip 底色，文字色取同色去 alpha 并做亮/暗适配
+      （与 cfg.lightDeathsNumberColor / darkDeathsNumberColor 的做法一致）。
+    - 物理/魔法/真实三色是「数据色」，不属于主题色体系，按你指定的规格固定：
+      物理 = 红棕、魔法 = 蓝、真实 = 白。具体十六进制只在 CSS 里写一份
+      （「伤害类型配色」那一节），这里不重复列，免得两处走散。
+      两个例外值得知道：
+        · 魔法取的是偏靛一档的蓝（约 217°）。主题色 #009faa 在约 184°，
+          纯青蓝系的蓝和它同处一个色相区间，同一个弹窗里两种「蓝青」会互相削弱。
+        · 真实伤害在浅色主题上必须换成中性灰 —— 纯白压在 #fbfbfb 底上会
+          直接消失。这是唯一一处没办法照字面执行的地方。
+
+  【待你确认的 3 个假设】（都做成了可改的单点）
+    A. 条长基准 = 组内最高伤害为满条（你选的方案）。全局统一基准只需改
+       groupHTML() 里 groupMax 的计算处。
+    B. 右侧除总伤害外还给「团队伤害占比」。若嫌多，删 .pct 一个节点即可。
+    C. 关闭方式已从底部按钮区改为标题行右上角的关闭按钮（按你的要求）。
+       这偏离了 MessageBoxBase 的既定形态，实机落地的坑见 CSS 第 4 节注释。
+    D. 「组内最高伤害」的数字原本用主题色强调，现已去掉 —— 强调色只保留
+       「我」这一个含义，免得同一个颜色有两种解释；组内最高那条本来就是满条，
+       信息没丢。要恢复的话得改两处：rowHTML 里重新输出 is-top 类，再加一条
+       .row.is-top .val b 规则 —— 光加 CSS 不会生效，因为现在没有任何地方
+       输出 is-top。
+
+    E. 视图切换用 TAB（Pivot）方式，按你的要求从 SegmentedWidget 改的。
+       Pivot 条目默认 18px，若嫌它压过 20px 的标题，改 .tab-item 的 font-size
+       （对应 Pivot.setItemFontSize()）。
+    F. 图例左侧那行「条长以组内最高伤害为基准」的口径说明已按你的要求移除。
+       要注意：条长是「组内相对」的，UI 上现在没有任何文字说明这一点，只剩
+       百分比和团队合计可作参照。真要补回来，建议挂在「团队总伤害」那个标签的
+       tooltip 上，不要重新占一行。
+
+  【数据接入（真实实现时）】
+    造成伤害 —— LCU 结算数据 /lol-end-of-game/v1/eog-stats-block 的玩家 STATS 里预期存在：
+      TOTAL_DAMAGE_DEALT_TO_CHAMPIONS
+      PHYSICAL_DAMAGE_DEALT_TO_CHAMPIONS
+      MAGIC_DAMAGE_DEALT_TO_CHAMPIONS
+      TRUE_DAMAGE_DEALT_TO_CHAMPIONS
+    承受伤害 —— 对应字段：
+      TOTAL_DAMAGE_TAKEN / PHYSICAL_DAMAGE_TAKEN / MAGIC_DAMAGE_TAKEN / TRUE_DAMAGE_TAKEN
+    若某个字段缺失，请退化为「仅总量」单色条，不要用 0 冒充缺失值。
+
+  【承伤口径的两个陷阱】（实现前务必确认，否则数字会误导人）
+    1. 口径不对称：totalDamageTaken 通常把小兵、野怪、防御塔的伤害也算进去，
+       而「造成伤害」那边是对英雄的口径。两个视图不可直接对比，更不能相减。
+       要严格对称，得改用「来自英雄的承伤」字段（如果拿得到）。
+    2. 承伤高不等于打得差：被集火、坦克定位、抗压换血都会推高它。所以承伤视图里
+       我故意没有做任何「越高越糟」的着色，也没把承伤和胜负绑定 —— 这是刻意的，
+       实现时别"顺手"补上红绿。
+    本页 10 名玩家的数值为演示用模拟数据，非真实对局。
+    英雄头像是 Riot 官方 Data Dragon CDN（版本见 JS 里的 DDRAGON 常量）。
+-->
+
+<style>
+/* ===========================================================================
+   0. 主题变量
+   =========================================================================== */
+:root{
+  --theme-color:#009faa;          /* qfluentwidgets 默认主题色 */
+  --radius-dialog:8px;            /* 弹窗 8px */
+  --radius-card:6px;              /* 卡片/面板 6px */
+  --radius-btn:5px;               /* 关闭按钮 5px（TransparentToolButton） */
+  --radius-icon:4px;              /* 小元素 4px */
+  --champ-ring:#785a28;           /* rgb(120,90,40) 英雄头像金环 */
+
+  /* 「我」这一行的强调。底色 tint 用主题色 + 15.7% alpha
+     （alpha 与 cfg.winCardColor 的 0x28 一致）。
+     tint 故意只定义在这里、不分主题：两套主题共用同一个 alpha，
+     靠它和各自底色合成出深浅 —— 给两份一样的值只是重复，没有意义。
+     但主题色当「文字色」时对比度不够（实测浅底 2.6:1、深底 3.6:1，
+     均不达 AA），所以文字另给一个按主题调过明度的 --me-accent（见下面两个块），
+     与 cfg.light/darkDeathsNumberColor「同一色相、亮暗各一套」是同一套思路。
+     实机落地时这几个值都应由 themeColor() 现算，不要写死。 */
+  --me-tint:rgba(0,159,170,.157);
+  --me-tint-hover:rgba(0,159,170,.28);
+}
+
+/* 深色主题 —— 取自 qss/dark + design.md */
+.stage[data-theme="dark"]{
+  --window:#202020;
+  --surface:#2b2b2b;
+  --border:rgb(35,35,35);
+  --text-1:#ffffff;
+  --text-2:rgb(200,200,200);
+  --text-3:rgb(176,176,177);
+  --row-hover:rgba(255,255,255,.084);
+  --track:rgba(255,255,255,.10);
+  --tip-bg:#3b3b3b;
+  --tip-border:rgba(255,255,255,.09);
+  --hover-overlay:rgba(255,255,255,.0837);  /* Fluent 控件 hover 覆盖色 */
+  --me-accent:#4dc3cf;            /* 主题色提亮变体，在本行 tint 上 5.1:1 */
+  --shadow:0 10px 36px rgba(0,0,0,.58);
+  /* 文字色：tint 去掉 alpha 后按主题适配。
+     lose 直接取 cfg.darkDeathsNumberColor(#ffff8d8d)，win 同法推导，均 ≥4.5:1 */
+  --win:#4cc22b;  --win-tint:rgba(57,176,27,.157);
+  --lose:#ff8d8d; --lose-tint:rgba(211,25,12,.157);
+  --dmg-real:#ffffff;             /* 真实伤害：你要的纯白（深色主题上成立） */
+}
+
+/* 亮色主题 —— 取自 qss/light + design.md */
+.stage[data-theme="light"]{
+  --window:#f3f3f3;
+  --surface:#fbfbfb;
+  --border:rgba(0,0,0,.095);
+  --text-1:#000000;
+  --text-2:rgb(100,100,100);
+  --text-3:rgb(131,131,131);
+  --row-hover:rgba(233,233,233,.5);
+  --track:rgba(0,0,0,.07);
+  --tip-bg:#ffffff;
+  --tip-border:rgba(0,0,0,.095);
+  --hover-overlay:rgba(0,0,0,.0578);
+  --me-accent:#00676e;            /* 主题色压深变体，在本行 tint 上 5.4:1 */
+  --shadow:0 10px 36px rgba(0,0,0,.22);
+  /* lose 取 cfg.lightDeathsNumberColor(#ffb60000)，win 同法推导，均 ≥4.5:1 */
+  --win:#1c6f0b;  --win-tint:rgba(57,176,27,.157);
+  --lose:#b60000; --lose-tint:rgba(211,25,12,.157);
+  --dmg-real:#8a8a8a;             /* 真实伤害：浅底上纯白会消失，只能换中性灰 */
+}
+
+/* 伤害类型配色（按你指定的：物理红棕 / 魔法蓝 / 真实白）
+   ---------------------------------------------------------------------------
+   物理 #b8512c：红棕，色相约 16°，和主题色、胜负色都不撞。
+   魔法 #3b82f6：蓝，色相约 217°。蓝是你要的，但这里刻意取偏靛一档 ——
+     主题色 #009faa 在 184°，纯青蓝系的蓝（比如原来的 #3d8fe0，210°）
+     和它同处一个色相区间，同一个弹窗里两种「蓝青」会互相削弱。
+   真实：深色主题就是你要的纯白 #ffffff；但浅色主题上纯白压在 #fbfbfb
+     底色上会直接消失，所以浅色主题只能换成中性灰 —— 这是唯一一处
+     没办法照字面执行的地方，见下面两个主题块。 */
+:root{
+  --dmg-phys:#b8512c;             /* 物理 · 红棕 */
+  --dmg-magic:#3b82f6;            /* 魔法 · 蓝 */
+}
+
+/* ===========================================================================
+   1. 画板（非产品的一部分，只是把两版并排摆出来的展示台）
+   =========================================================================== */
+*,*::before,*::after{box-sizing:border-box}
+
+body{
+  margin:0;
+  background:#141414;
+  color:#e8e8e8;
+  font:14px/1.5 'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+.board-head{padding:24px 24px 14px}
+.board-head h1{margin:0 0 6px;font-size:20px;font-weight:600;letter-spacing:.01em}
+.board-head p{margin:0;font-size:12px;color:#8c8c8c}
+.board-head code{
+  display:inline-block;            /* 行内元素吃不到上下 padding，会压到下一行 */
+  font:12px/1 'Cascadia Mono','Consolas',monospace;
+  padding:2px 5px;border-radius:var(--radius-icon);
+  background:rgba(255,255,255,.07);color:#c9c9c9;
+}
+
+/* 画板上的配色切换已移除：配色改成你指定的固定三色后，没有可切的东西了。
+   如果以后还要做变体对比，把 .palette-* 那一套加回来即可。 */
+
+.board{
+  display:flex;gap:24px;align-items:flex-start;
+  padding:0 24px 48px;
+  overflow-x:auto;
+}
+
+.stage{flex:0 0 auto;width:680px}
+.stage-cap{
+  font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:#7d7d7d;margin:0 0 8px 2px;
+}
+
+/* 模拟 MaskDialogBase 的模态遮罩：应用窗口底色 + 29.8% 黑 */
+.mask{
+  position:relative;
+  background:var(--window);
+  border-radius:10px;
+  padding:24px 20px;              /* 留出窗口边距，弹窗 680-40=640px 宽 */
+  display:flex;justify-content:center;
+}
+.mask::before{
+  content:'';position:absolute;inset:0;
+  border-radius:inherit;
+  background:rgba(0,0,0,.298);
+}
+
+/* ===========================================================================
+   2. 弹窗本体（对应 MessageBoxBase 的 widget）
+   =========================================================================== */
+.dialog{
+  position:relative;z-index:1;
+  width:100%;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius-dialog);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+  display:flex;flex-direction:column;
+}
+
+/* viewLayout：边距 24 / 间距 12 */
+.dlg-view{
+  padding:24px;
+  display:flex;flex-direction:column;gap:12px;
+}
+
+/* 标题行：左边标题，右边「造成伤害/承受伤害」切换 + 关闭按钮 */
+.dlg-head{display:flex;align-items:flex-start;gap:12px}
+.dlg-head-text{flex:1 1 auto;min-width:0}
+.dlg-title{margin:0;font-size:20px;font-weight:600;color:var(--text-1);letter-spacing:.01em}
+.dlg-sub{margin:4px 0 0;font-size:12px;color:var(--text-3)}
+.dlg-sub .dot-sep{margin:0 6px;opacity:.55}
+
+.dlg-close{
+  flex:0 0 auto;
+  display:flex;align-items:center;justify-content:center;
+  width:32px;height:32px;
+  margin:-2px -8px 0 0;           /* 负边距把图标拉回内容边距；-2px 让按钮中线落在标题的视觉中心 */
+  border:none;border-radius:var(--radius-btn);
+  background:transparent;
+  color:var(--text-1);            /* 图标用 currentColor，自动跟随主题 */
+  cursor:pointer;
+  transition:background-color .12s ease;
+}
+.dlg-close:hover{background:var(--hover-overlay)}
+.dlg-close:active{opacity:.85}
+.dlg-close:focus-visible{outline:2px solid var(--theme-color);outline-offset:2px}
+.dlg-close svg{display:block;width:14px;height:14px}
+
+/* ---- 视图切换：TAB 方式（复刻 qfluentwidgets Pivot）----
+   和 SegmentedWidget 的区别就是「没有容器、没有胶囊」：只剩文字 +
+   选中项底部一条 16×3 的主题色指示条。数值读自 pivot.py：
+     条目字号 18px（PivotItem._postInit 里的 setFont(self, 18)）
+     指示条 indicatorLength=16、y = height-3、圆角 1.5、取主题色
+   想调小字号：Pivot 那边用 setItemFontSize()，这里改 font-size 即可。 */
+.dlg-tabs{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+}
+.tabs{
+  display:flex;flex:0 0 auto;   /* 条目自带 height:32px，不需要再设 align-items */
+  --tab-pad:14px;               /* 条目左右内边距；下面的负边距必须与它同值 */
+  margin-left:calc(-1 * var(--tab-pad));   /* 抵消掉 padding，让首个 tab 的文字与上方标题左对齐 */
+}
+.tab-item{
+  position:relative;
+  display:flex;align-items:center;justify-content:center;   /* 不靠 button 的隐式居中，显式居中以稳 */
+  height:32px;
+  padding:0 var(--tab-pad);
+  border:none;border-radius:0;
+  background:transparent;
+  color:var(--text-2);
+  font:18px/1 'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif;
+  cursor:pointer;
+  transition:color .12s ease;
+}
+.tab-item:hover{color:var(--text-1)}
+.tab-item[aria-selected="true"]{color:var(--text-1);font-weight:600}
+.tab-item:focus-visible{outline:2px solid var(--theme-color);outline-offset:-2px}
+/* 选中项底部的 16×3 主题色指示条 */
+.tab-item[aria-selected="true"]::after{
+  content:'';
+  position:absolute;
+  left:50%;bottom:0;
+  width:16px;height:3px;
+  margin-left:-8px;
+  border-radius:1.5px;
+  background:var(--theme-color);
+}
+
+/* 三色图例（口径说明已按你的要求移除） */
+.legend-items{display:flex;align-items:center;gap:14px;flex:0 0 auto}
+.legend-item{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-2)}
+.swatch{display:inline-block;width:8px;height:8px;border-radius:2px}
+
+.swatch.phys,.part.phys,.dot.phys{background:var(--dmg-phys)}
+.swatch.magic,.part.mag,.dot.magic{background:var(--dmg-magic)}
+.swatch.real,.part.real,.dot.real{background:var(--dmg-real)}
+
+/* ===========================================================================
+   3. 分组 + 行
+   =========================================================================== */
+.dlg-groups{display:flex;flex-direction:column;gap:16px}
+
+.group-head{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:0 8px;margin:0 -8px 4px;
+}
+
+.side-chip{
+  font-size:12px;font-weight:600;line-height:1.6;
+  padding:1px 8px;border-radius:var(--radius-icon);
+}
+.side-chip.win{background:var(--win-tint);color:var(--win)}
+.side-chip.lose{background:var(--lose-tint);color:var(--lose)}
+
+.group-total{font-size:12px;color:var(--text-3)}
+.group-total b{
+  font-size:13px;font-weight:600;color:var(--text-1);
+  font-variant-numeric:tabular-nums;
+}
+
+.rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+
+.row{
+  position:relative;
+  display:grid;
+  grid-template-columns:32px 132px 1fr 124px;
+  align-items:center;
+  gap:12px;
+  padding:5px 8px;margin:0 -8px;
+  border-radius:var(--radius-card);
+  transition:background-color .15s ease;
+}
+.row:hover,.row:focus-visible{background:var(--row-hover);z-index:2}
+.row:focus-visible{outline:2px solid var(--theme-color);outline-offset:-2px}
+
+/* 「我」的行：整行主题色 tint + 召唤师 ID 走强调色。
+   强调落在数据本身上，不加标签/角标；实机里由 LCU 本地玩家判定这个类。 */
+.row.is-me{background:var(--me-tint)}
+.row.is-me:hover,.row.is-me:focus-visible{background:var(--me-tint-hover)}
+.row.is-me .sid{color:var(--me-accent)}
+
+/* 英雄头像：圆形 + 2px 金环（对应 RoundIcon(icon, 32, 2, 2)） */
+.avatar{
+  position:relative;display:block;
+  width:32px;height:32px;
+  border-radius:50%;
+  border:2px solid var(--champ-ring);
+  overflow:hidden;
+  background:#0f1115;
+}
+.avatar img{
+  display:block;width:100%;height:100%;
+  object-fit:cover;
+  transform:scale(1.035);          /* 对应 RoundIcon 的 overscaled=2（120px 源图裁 2px） */
+}
+/* 头像加载失败时的诚实降级：不画烂 SVG，直接给首字色块 */
+.avatar.no-img::after{
+  content:attr(data-letter);
+  position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:600;color:#d8c9a3;background:#1e232b;
+}
+
+.who{display:flex;flex-direction:column;min-width:0;line-height:1.35}
+.sid{
+  font-size:13px;font-weight:700;color:var(--text-1);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.sid .tag{font-size:11px;font-weight:400;font-style:normal;color:var(--text-3)}
+.cname{
+  font-size:11px;color:var(--text-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+
+/* ---- 伤害条：三段堆叠，外层是槽，内层是填充 ---- */
+.bar-wrap{
+  position:relative;display:block;
+  height:10px;
+  border-radius:5px;               /* = height/2，与 SmoothProgressBar 一致 */
+  background:var(--track);
+}
+.bar{
+  display:flex;height:100%;width:0;
+  border-radius:5px;
+  overflow:hidden;
+  transition:width .65s cubic-bezier(.16,1,.3,1);
+}
+.part{flex:0 1 0;min-width:0}      /* 伤害条的一段；flex-grow 由 JS 按伤害值注入，天然无进位缝隙 */
+
+/* 行悬停/聚焦时显示三段的具体数值（否则条上的三段读不出数字）。
+   以整行为定位基准并右对齐，所以不依赖行高，也没有横向魔法数字。 */
+.tip{
+  position:absolute;right:8px;bottom:calc(100% + 6px);
+  z-index:5;
+  display:grid;grid-template-columns:8px 1fr auto;align-items:center;
+  gap:4px 8px;
+  padding:8px 10px;
+  border-radius:var(--radius-card);
+  background:var(--tip-bg);
+  border:1px solid var(--tip-border);
+  box-shadow:0 6px 20px rgba(0,0,0,.28);
+  font-size:11px;color:var(--text-3);
+  white-space:nowrap;
+  opacity:0;transform:translateY(4px);
+  pointer-events:none;
+  transition:opacity .14s ease,transform .14s ease;
+}
+.row:hover .tip,.row:focus-visible .tip{opacity:1;transform:translateY(0)}
+.tip .dot{display:block;width:8px;height:8px;border-radius:2px}
+.tip b{
+  font-weight:600;color:var(--text-1);
+  font-variant-numeric:tabular-nums;text-align:right;
+}
+
+/* ---- 右侧数据 ---- */
+.val{
+  display:flex;align-items:baseline;justify-content:flex-end;gap:8px;
+  font-variant-numeric:tabular-nums;
+}
+.val b{font-size:13px;font-weight:700;color:var(--text-1)}
+.val .pct{font-size:11px;font-style:normal;color:var(--text-3)}
+
+/* ===========================================================================
+   4. 关闭方式
+   ---------------------------------------------------------------------------
+   原本这里是 MessageBoxBase 的底部按钮区（固定 81px、两按钮等宽）。
+   现在改成标题行右上角的关闭按钮 —— 这已经偏离 MessageBoxBase 的既定形态，
+   实机落地时注意：hideYesButton()/hideCancelButton() 只 setVisible(False)，
+   会留下 81px 空档，得把 buttonGroup 从 vBoxLayout 里整个摘掉；
+   关闭按钮用 TransparentToolButton(FluentIcon.CLOSE) 插进标题行即可。
+   =========================================================================== */
+
+@media (prefers-reduced-motion:reduce){
+  .bar{transition:none!important}
+  .tip{transition:none!important}
+}
+</style>
+</head>
+
+<body>
+
+<header class="board-head">
+  <h1>Seraphine · 对局伤害面板</h1>
+  <p>对局结束弹窗（<code>MaskDialogBase</code> / <code>MessageBoxBase</code>）· 深色 / 浅色双主题 ·
+     数值为演示用模拟数据，英雄头像取自 Riot Data Dragon 官方 CDN</p>
+</header>
+
+<main class="board">
+  <section class="stage" data-theme="dark">
+    <p class="stage-cap">Dark 深色主题</p>
+    <div class="mask"><div class="dialog" role="dialog" aria-label="伤害统计" data-dialog></div></div>
+  </section>
+
+  <section class="stage" data-theme="light">
+    <p class="stage-cap">Light 亮色主题</p>
+    <div class="mask"><div class="dialog" role="dialog" aria-label="伤害统计" data-dialog></div></div>
+  </section>
+</main>
+
+<script>
+/* ===========================================================================
+   数据层
+   ---------------------------------------------------------------------------
+   每个玩家的 dealt / taken 各自是「物理 + 魔法 + 真实」三段，切换视图时同一套
+   渲染逻辑换一个索引即可，渲染函数里不需要出现 if (view === 'taken')。
+   players 故意乱序写，由 groupHTML() 负责降序排序 —— 排序是需求的一部分，
+   不能靠手写顺序蒙过去。
+   =========================================================================== */
+const DDRAGON = '16.19.1';   // https://ddragon.leagueoflegends.com/api/versions.json
+const champIcon = key => `https://ddragon.leagueoflegends.com/cdn/${DDRAGON}/img/champion/${key}.png`;
+
+/* 两个视图：凡是会跟着视图变的文案都收在这里，别散到渲染函数里 */
+const VIEWS = {
+  dealt: {
+    label: '造成伤害',
+    totalLabel: '团队总伤害',
+    unit: '总伤害',
+    legend: ['物理伤害', '魔法伤害', '真实伤害'],
+  },
+  taken: {
+    label: '承受伤害',
+    totalLabel: '团队总承伤',
+    unit: '总承伤',
+    legend: ['物理承伤', '魔法承伤', '真实承伤'],
+  },
+};
+const VIEW_ORDER = ['dealt', 'taken'];
+let view = 'dealt';          // 当前视图，两套主题面板共用这一个状态
+
+const MATCH = {
+  map: '召唤师峡谷',
+  queue: '单双排位',
+  duration: '32:14',
+  teams: [
+    {
+      name: '我方', result: 'win', resultText: '胜利',
+      players: [
+        { name:'只想躺赢',     tag:'0912', champion:'卡莎',     key:'Kaisa',
+          dealt:{ physical:38940, magic: 6180, real:1420 }, taken:{ physical: 8420, magic:11260, real: 980 } },
+        { name:'不听劝的猫',   tag:'0721', champion:'阿卡丽',   key:'Akali',
+          dealt:{ physical: 4120, magic:41860, real:3240 }, taken:{ physical: 6240, magic: 9180, real:1120 } },
+        { name:'羊来啦',       tag:'0417', champion:'千珏',     key:'Kindred', me:true,
+          dealt:{ physical:22480, magic: 3260, real:2140 }, taken:{ physical:12180, magic:10640, real:1860 } },
+        { name:'一剑霜寒',     tag:'2333', champion:'菲奥娜',   key:'Fiora',
+          dealt:{ physical:31270, magic:    0, real:4860 }, taken:{ physical:18640, magic:14220, real:3460 } },
+        { name:'只会一手洛',   tag:'1111', champion:'洛',       key:'Rakan',
+          dealt:{ physical: 1120, magic: 9640, real: 380 }, taken:{ physical:14920, magic:13480, real:2240 } }
+      ]
+    },
+    {
+      name: '敌方', result: 'lose', resultText: '失败',
+      players: [
+        { name:'弹幕护体',     tag:'0001', champion:'伊泽瑞尔', key:'Ezreal',
+          dealt:{ physical:27640, magic: 8910, real:1180 }, taken:{ physical: 9640, magic:12880, real:1120 } },
+        { name:'影子里的我',   tag:'6666', champion:'劫',       key:'Zed',
+          dealt:{ physical:33180, magic: 2240, real:5320 }, taken:{ physical: 7860, magic:10240, real:1340 } },
+        { name:'一脚定江山',   tag:'5200', champion:'李青',     key:'LeeSin',
+          dealt:{ physical:18920, magic: 1140, real:2860 }, taken:{ physical:15240, magic:11860, real:2640 } },
+        { name:'太阳女神',     tag:'2333', champion:'蕾欧娜',   key:'Leona',
+          dealt:{ physical:  980, magic: 7420, real: 240 }, taken:{ physical:26480, magic:17240, real:5360 } },
+        { name:'德玛西亚之力', tag:'8888', champion:'盖伦',     key:'Garen',
+          dealt:{ physical:21380, magic:    0, real:6240 }, taken:{ physical:24180, magic:15640, real:4820 } }
+      ]
+    }
+  ]
+};
+
+/* ===========================================================================
+   工具函数
+   =========================================================================== */
+const total = (p, v) => { const d = p[v]; return d.physical + d.magic + d.real; };
+const fmt = n => n.toLocaleString('en-US');
+
+/**
+ * 最大余数法：让一组百分比的「显示值」之和精确等于 100.0%。
+ * 每行各自 toFixed(1) 会得到 99.9% / 100.1% 这种合计偏差，在数据面板里是硬伤。
+ */
+function largestRemainder(values, totalValue, digits = 1) {
+  const scale = 10 ** digits;
+  if (!totalValue) return values.map(() => 0);
+
+  const exact = values.map(v => v / totalValue * 100 * scale);
+  const out = exact.map(Math.floor);
+  let rest = Math.round(100 * scale) - out.reduce((a, b) => a + b, 0);
+
+  // 余数从大到小依次补 1，直到合计补齐
+  exact
+    .map((v, i) => ({ i, rem: v - Math.floor(v) }))
+    .sort((a, b) => b.rem - a.rem)
+    .forEach(({ i }) => { if (rest-- > 0) out[i] += 1; });
+
+  return out.map(v => v / scale);
+}
+
+/* ===========================================================================
+   渲染
+   =========================================================================== */
+
+/** 单行（share 是本行在队伍中的占比，已由最大余数法配平） */
+function rowHTML(p, index, v, groupMax, share) {
+  const d = p[v];
+  const t = total(p, v);
+  const V = VIEWS[v];
+  // 条长基准 = 组内最高（假设 A）；换成全局基准只需把 groupMax 换成全场最大值
+  const width = groupMax ? (t / groupMax * 100) : 0;
+
+  return `
+  <li class="row${p.me ? ' is-me' : ''}" tabindex="0"
+      aria-label="${p.champion}，${p.name}#${p.tag}${p.me ? '（我）' : ''}，${V.unit} ${fmt(t)}，占团队 ${share.toFixed(1)}%">
+    <span class="avatar" data-letter="${p.champion.charAt(0)}">
+      <img src="${champIcon(p.key)}" alt="${p.champion}" loading="lazy"
+           onerror="this.parentNode.classList.add('no-img');this.remove()">
+    </span>
+
+    <span class="who">
+      <span class="sid">${p.name}<i class="tag">#${p.tag}</i></span>
+      <span class="cname">${p.champion}</span>
+    </span>
+
+    <span class="bar-wrap">
+      <span class="bar" role="img" data-w="${width.toFixed(2)}"
+            style="transition-delay:${index * 28}ms"
+            aria-label="${V.legend[0]} ${fmt(d.physical)}，${V.legend[1]} ${fmt(d.magic)}，${V.legend[2]} ${fmt(d.real)}">
+        <i class="part phys" style="flex-grow:${d.physical}"></i>
+        <i class="part mag"  style="flex-grow:${d.magic}"></i>
+        <i class="part real" style="flex-grow:${d.real}"></i>
+      </span>
+    </span>
+
+    <span class="val"><b>${fmt(t)}</b><i class="pct">${share.toFixed(1)}%</i></span>
+
+    <span class="tip" aria-hidden="true">
+      <i class="dot phys"></i><span>${V.legend[0]}</span><b>${fmt(d.physical)}</b>
+      <i class="dot magic"></i><span>${V.legend[1]}</span><b>${fmt(d.magic)}</b>
+      <i class="dot real"></i><span>${V.legend[2]}</span><b>${fmt(d.real)}</b>
+    </span>
+  </li>`;
+}
+
+/** 一个阵营 */
+function groupHTML(team, v) {
+  const sorted = [...team.players].sort((a, b) => total(b, v) - total(a, v));  // 降序
+  const totals = sorted.map(p => total(p, v));
+  const teamTotal = totals.reduce((a, b) => a + b, 0);
+  const groupMax = totals.length ? totals[0] : 0;
+  const shares = largestRemainder(totals, teamTotal);   // 合计精确等于 100.0%
+
+  return `
+  <section>
+    <header class="group-head">
+      <span class="side-chip ${team.result}">${team.name} · ${team.resultText}</span>
+      <span class="group-total">${VIEWS[v].totalLabel} <b>${fmt(teamTotal)}</b></span>
+    </header>
+    <ul class="rows">${sorted.map((p, i) => rowHTML(p, i, v, groupMax, shares[i])).join('')}</ul>
+  </section>`;
+}
+
+/** 整块弹窗（两套主题共用同一份 DOM 结构与同一份数据） */
+function dialogHTML(v) {
+  const V = VIEWS[v];
+  return `
+  <div class="dlg-view">
+    <div class="dlg-head">
+      <div class="dlg-head-text">
+        <h2 class="dlg-title">伤害统计</h2>
+        <p class="dlg-sub">
+          ${MATCH.map}<span class="dot-sep">·</span>${MATCH.queue}<span class="dot-sep">·</span>${MATCH.duration}
+        </p>
+      </div>
+
+      <button class="dlg-close" type="button" aria-label="关闭">
+        <svg viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+          <path d="M3 3 11 11M11 3 3 11" stroke="currentColor" stroke-width="1.4"
+                stroke-linecap="round" fill="none"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="dlg-tabs">
+      <div class="tabs" role="tablist" aria-label="统计维度">
+        ${VIEW_ORDER.map(k => `<button class="tab-item" type="button" role="tab"
+          data-view="${k}" aria-selected="${k === v}" tabindex="${k === v ? 0 : -1}">${VIEWS[k].label}</button>`).join('')}
+      </div>
+
+      <span class="legend-items">
+        ${V.legend.map((name, i) =>
+          `<span class="legend-item"><i class="swatch ${['phys', 'magic', 'real'][i]}"></i>${name}</span>`
+        ).join('')}
+      </span>
+    </div>
+
+    <div class="dlg-groups" role="tabpanel" aria-label="${V.label}">${MATCH.teams.map(t => groupHTML(t, v)).join('')}</div>
+  </div>`;
+}
+
+/* ===========================================================================
+   渲染与视图切换
+   ---------------------------------------------------------------------------
+   两个主题面板共用同一个 view 状态：切换时一起重渲染，所以左右永远同步。
+   每次重渲染都重播一次进度条生长动画 —— 既提示「数据换了」，也避免数字
+   瞬变带来的跳变感（prefers-reduced-motion 下由 CSS 关掉过渡）。
+   =========================================================================== */
+function growBars() {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    document.querySelectorAll('.bar').forEach(bar => { bar.style.width = bar.dataset.w + '%'; });
+  }));
+}
+
+function bindTabs() {
+  document.querySelectorAll('.tab-item').forEach(btn => {
+    btn.addEventListener('click', () => switchView(btn));
+    btn.addEventListener('keydown', onTabKeydown);
+  });
+}
+
+/** 切换视图，并把焦点交还给同一面板里对应的新 tab */
+function switchView(btn) {
+  if (btn.dataset.view === view) return;
+
+  const host = btn.closest('[data-dialog]');   // 重渲染会销毁这个按钮，先把容器记下来
+  view = btn.dataset.view;
+  render();
+
+  // innerHTML 重渲染后原按钮已不存在，焦点会掉回 <body>（下次 Tab 从文档开头重来）。
+  // 这里把焦点还给同一面板里 data-view 相同的新 tab —— 必须限定在 host 内查，
+  // 否则可能把焦点抢到另一块主题面板去。
+  const next = host && host.querySelector('.tab-item[data-view="' + view + '"]');
+  if (next) next.focus();
+}
+
+/** tablist 的左右方向键（ARIA tab 的预期操作，缺了就是可访问性缺口） */
+function onTabKeydown(e) {
+  const dir = (e.key === 'ArrowRight' || e.key === 'ArrowDown') ? 1
+    : (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 0;
+  if (!dir) return;
+
+  const items = [...e.currentTarget.closest('[data-dialog]').querySelectorAll('.tab-item')];
+  const next = items[(items.indexOf(e.currentTarget) + dir + items.length) % items.length];
+  if (next) {
+    e.preventDefault();
+    switchView(next);
+  }
+}
+
+function render() {
+  document.querySelectorAll('[data-dialog]').forEach(el => { el.innerHTML = dialogHTML(view); });
+  bindTabs();
+  growBars();
+}
+
+render();
+</script>
+
+</body>
+</html>

@@ -28,6 +28,8 @@ from app.view.auxiliary_interface import AuxiliaryInterface
 from app.view.gameflow_interface import GameflowInterface
 from app.view.opgg_window import OpggWindow
 from app.view.aram_bench_window import AramBenchWindow
+from app.view.damage_panel_window import (DamagePanelWindow, POST_GAME_STATUS,
+                                          PANEL_APIS, isFetchingQuietly)
 from app.common.util import (github, getLolClientPid, getTasklistPath,
                              getLolClientPidSlowly, getLoLPathByRegistry)
 from app.components.avatar_widget import NavigationAvatarWidget
@@ -116,6 +118,7 @@ class MainWindow(FluentWindow):
 
         self.opggWindow = OpggWindow()
         self.aramBenchWindow = AramBenchWindow()
+        self.damagePanelWindow = DamagePanelWindow()
 
         logger.critical("Seraphine initialized", TAG)
 
@@ -303,6 +306,12 @@ class MainWindow(FluentWindow):
 
     @asyncSlot(str, BaseException)
     async def __onShowLcuConnectError(self, api, obj):
+        # 伤害面板正在静默重试取数时让路：那期间的失败是预期情况
+        # （结算数据不是游戏一结束就立刻可取），否则一局会连弹好几个错误提示。
+        # 只对伤害面板会调的那几个接口让路，其它调用方的报错照旧弹。
+        if isFetchingQuietly() and api in PANEL_APIS:
+            return
+
         # 同类错误限制弹出频率(1.5秒每次)
         if time.time() - self.lastTipsTime < 1.5 and self.lastTipsType is type(obj):
             return
@@ -754,6 +763,7 @@ class MainWindow(FluentWindow):
             self.__terminateListeners()
             self.opggWindow.close()
             self.aramBenchWindow.close()
+            self.damagePanelWindow.close()
 
             return super().closeEvent(a0)
         else:
@@ -815,8 +825,11 @@ class MainWindow(FluentWindow):
             isGaming = True
         elif status == 'WaitingForStatus':
             title = self.tr("Waiting for status")
-        elif status == 'EndOfGame':
+        elif status in POST_GAME_STATUS:
+            # 对局结束：后台去拉结算数据并弹出伤害面板。
+            # 这里不能 await —— 带重试的取数最长要跑几十秒，会把状态处理卡住。
             title = self.tr("End of game")
+            asyncio.ensure_future(self.damagePanelWindow.fetchAndShow())
         elif status == 'Lobby':
             title = self.tr("Lobby")
             await self.__onGameEnd()
@@ -1075,6 +1088,7 @@ class MainWindow(FluentWindow):
         self.setMicaEffectEnabled(isMicaEnabled)
         self.opggWindow.setMicaEffectEnabled(isMicaEnabled)
         self.aramBenchWindow.setMicaEffectEnabled(isMicaEnabled)
+        self.damagePanelWindow.setMicaEffectEnabled(isMicaEnabled)
 
     @asyncSlot()
     async def __onFixLCUButtonClicked(self):
