@@ -16,7 +16,8 @@ from app.common.style_sheet import StyleSheet
 from app.components.seraphine_interface import SeraphineInterface
 from app.components.setting_cards import (LineEditSettingCard, GameTabColorSettingCard,
                                           LooseSwitchSettingCard, ProxySettingCard,
-                                          DeathsNumberColorSettingCard, ThemeColorSettingCard)
+                                          DeathsNumberColorSettingCard, ThemeColorSettingCard,
+                                          DamagePanelSettingCard)
 from app.components.message_box import MultiPathSettingMsgBox
 
 
@@ -78,10 +79,9 @@ class SettingInterface(SeraphineInterface):
             cfg.enableReserveGameinfo
         )
 
-        self.damagePanelCard = SwitchSettingCard(
-            Icon.PERSON_BOARD, self.tr("对局伤害面板"),
-            self.tr("对局结束后自动在屏幕右上角弹出伤害面板"),
-            cfg.enableDamagePanel
+        self.damagePanelCard = DamagePanelSettingCard(
+            self.tr("对局伤害面板"),
+            self.tr("对局结束后自动在屏幕右上角弹出伤害面板")
         )
 
         self.generalGroup = SettingCardGroup(self.tr("General"),

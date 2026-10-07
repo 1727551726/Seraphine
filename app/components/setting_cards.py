@@ -534,3 +534,118 @@ class LooseSwitchSettingCard(SwitchSettingCard):
             super().setValue(isChecked)
         else:
             self.switchButton.setChecked(False)
+
+
+class DamagePanelSettingCard(ExpandGroupSettingCard):
+    """ 对局伤害面板的二级菜单
+
+    展开区三项：面板总开关、弹出后是否自动关闭、自动关闭时长（秒）。
+
+    结构照 gameflow_interface.AutoAcceptCard：状态文字放在卡片标题行，
+    具体设置放进展开区，这样收起时也能一眼看到当前状态。
+    """
+
+    def __init__(self, title, content=None, parent=None):
+        super().__init__(Icon.PERSON_BOARD, title, content, parent)
+
+        self.statusLabel = QLabel(self)
+
+        # 第一项：面板总开关
+        self.panelWidget = QWidget(self.view)
+        self.panelLayout = QHBoxLayout(self.panelWidget)
+
+        self.panelLabel = QLabel(self.tr("显示对局伤害面板"), self)
+        self.panelSwitch = SwitchButton(indicatorPos=IndicatorPosition.RIGHT)
+
+        # 第二项：弹出后自动关闭
+        self.closeWidget = QWidget(self.view)
+        self.closeLayout = QHBoxLayout(self.closeWidget)
+
+        self.closeLabel = QLabel(self.tr("弹出后自动关闭"), self)
+        self.closeSwitch = SwitchButton(indicatorPos=IndicatorPosition.RIGHT)
+
+        # 第三项：自动关闭时长
+        self.delayWidget = QWidget(self.view)
+        self.delayLayout = QHBoxLayout(self.delayWidget)
+
+        self.delayLabel = QLabel(self.tr("自动关闭时长（秒）:"), self)
+        self.delaySpinBox = SpinBox(self)
+
+        self.__initLayout()
+        self.__initWidget()
+
+    def __initLayout(self):
+        self.addWidget(self.statusLabel)
+
+        self.panelLayout.setContentsMargins(48, 18, 44, 18)
+        self.panelLayout.addWidget(self.panelLabel, alignment=Qt.AlignLeft)
+        self.panelLayout.addWidget(self.panelSwitch, alignment=Qt.AlignRight)
+        self.panelLayout.setSizeConstraint(QHBoxLayout.SetMinimumSize)
+
+        self.closeLayout.setContentsMargins(48, 18, 44, 18)
+        self.closeLayout.addWidget(self.closeLabel, alignment=Qt.AlignLeft)
+        self.closeLayout.addWidget(self.closeSwitch, alignment=Qt.AlignRight)
+        self.closeLayout.setSizeConstraint(QHBoxLayout.SetMinimumSize)
+
+        self.delayLayout.setSpacing(19)
+        self.delayLayout.setContentsMargins(48, 18, 44, 18)
+        self.delayLayout.addWidget(self.delayLabel, alignment=Qt.AlignLeft)
+        self.delayLayout.addWidget(self.delaySpinBox, alignment=Qt.AlignRight)
+        self.delayLayout.setSizeConstraint(QHBoxLayout.SetMinimumSize)
+
+        self.viewLayout.setSpacing(0)
+        self.viewLayout.setContentsMargins(0, 0, 0, 0)
+        self.addGroupWidget(self.panelWidget)
+        self.addGroupWidget(self.closeWidget)
+        self.addGroupWidget(self.delayWidget)
+
+    def __initWidget(self):
+        self.panelSwitch.setOnText(self.tr("开"))
+        self.panelSwitch.setOffText(self.tr("关"))
+        self.closeSwitch.setOnText(self.tr("开"))
+        self.closeSwitch.setOffText(self.tr("关"))
+
+        self.delaySpinBox.setRange(*cfg.damagePanelAutoCloseDelay.range)
+        self.delaySpinBox.setSingleStep(5)
+        self.delaySpinBox.setMinimumWidth(250)
+
+        self.panelSwitch.setChecked(bool(cfg.get(cfg.enableDamagePanel)))
+        self.closeSwitch.setChecked(bool(cfg.get(cfg.enableDamagePanelAutoClose)))
+        self.delaySpinBox.setValue(int(cfg.get(cfg.damagePanelAutoCloseDelay)))
+
+        self.panelSwitch.checkedChanged.connect(self.__onPanelChanged)
+        self.closeSwitch.checkedChanged.connect(self.__onCloseChanged)
+        self.delaySpinBox.valueChanged.connect(self.__onDelayChanged)
+
+        self.__updateStatus()
+        self.__updateEnabled()
+
+    def __onPanelChanged(self, isChecked: bool):
+        qconfig.set(cfg.enableDamagePanel, isChecked)
+        self.__updateStatus()
+        self.__updateEnabled()
+
+    def __onCloseChanged(self, isChecked: bool):
+        qconfig.set(cfg.enableDamagePanelAutoClose, isChecked)
+        self.__updateStatus()
+        self.__updateEnabled()
+
+    def __onDelayChanged(self, value):
+        qconfig.set(cfg.damagePanelAutoCloseDelay, value)
+        self.__updateStatus()
+
+    def __updateEnabled(self):
+        """面板关掉时自动关闭两项都没意义；自动关闭关掉时，时长也没意义"""
+        isEnabled = self.panelSwitch.isChecked()
+        self.closeWidget.setEnabled(isEnabled)
+        self.delayWidget.setEnabled(isEnabled and self.closeSwitch.isChecked())
+
+    def __updateStatus(self):
+        if not self.panelSwitch.isChecked():
+            self.statusLabel.setText(self.tr("已关闭"))
+        elif not self.closeSwitch.isChecked():
+            self.statusLabel.setText(self.tr("已开启，不自动关闭"))
+        else:
+            self.statusLabel.setText(
+                self.tr("已开启，") + str(self.delaySpinBox.value())
+                + self.tr(" 秒后自动关闭"))

@@ -763,6 +763,7 @@ class MainWindow(FluentWindow):
             self.__terminateListeners()
             self.opggWindow.close()
             self.aramBenchWindow.close()
+            self.damagePanelWindow.blockShowing()
             self.damagePanelWindow.close()
 
             return super().closeEvent(a0)

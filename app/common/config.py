@@ -172,6 +172,11 @@ class Config(QConfig):
     # 对局伤害面板（默认开启）
     enableDamagePanel = ConfigItem(
         "Functions", "EnableDamagePanel", True, BoolValidator())
+    # 面板弹出后自动关闭（默认开启，15 秒后关闭）
+    enableDamagePanelAutoClose = ConfigItem(
+        "Functions", "EnableDamagePanelAutoClose", True, BoolValidator())
+    damagePanelAutoCloseDelay = RangeConfigItem(
+        "Functions", "DamagePanelAutoCloseDelay", 15, RangeValidator(5, 300))
 
     # 自动游戏流配置
     enableAutoHonor = ConfigItem(

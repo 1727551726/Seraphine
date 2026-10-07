@@ -1,6 +1,9 @@
 import asyncio
 import time
 
+import win32con
+import win32gui
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon, QShowEvent
 from PyQt5.QtWidgets import (QApplication, QHBoxLayout, QLabel, QVBoxLayout,
                              QWidget)
@@ -17,9 +20,23 @@ TAG = 'DamagePanelWindow'
 # 对局结束后这几个阶段才拿得到结算数据（和 gameflow_interface 的判断保持一致）
 POST_GAME_STATUS = ('PreEndOfGame', 'WaitingForStats', 'EndOfGame')
 
-# 结算数据不是游戏一结束就立刻可取，失败要重试
-FETCH_RETRY = 8
+# 结算数据不是游戏一结束就立刻可取：客户端要把这一局写进匹配历史，
+# 期间详情接口只会返回没有 participants 的空壳，所以要留足够长的重试窗口
+# （实测索引延迟可达几十秒）。20 次 × 3 秒 ≈ 60 秒。
+FETCH_RETRY = 20
 FETCH_INTERVAL = 3.0
+
+# 回退到匹配历史时的时效宽限，必须比 session 候选严格得多：
+# 本局还没进匹配历史索引时，列表里最近一局就是**上一局**，
+# 用宽泛的 15 分钟判定会把上一局的数据当成刚打完这局弹出来
+# （大乱斗、重开、早期投降这些短局恰好会命中）。
+HISTORY_TOLERANCE = 3 * 60
+
+# session 候选的时效上限。它是权威依据，理论上不需要校验，但同一接口有
+# 「数据陈旧」的先例（connector 里有 FIXME 记录该接口会返回上一局的队员信息），
+# 万一 gameData 残留一个已结算的旧局，不设上限就会把更早的一局当成本局弹出。
+# 刚结束的局必在几分钟内，所以 1 小时的上限绝不会误拒。
+SESSION_MAX_AGE = 60 * 60
 
 # 距离屏幕右上角的留白
 SCREEN_MARGIN = 16
@@ -55,7 +72,8 @@ STAT_KEYS = {
 # 本模块会调用的 connector 方法名。retry 装饰器耗尽重试时会把函数名
 # 通过 signalBus.lcuApiExceptionRaised 发出去，main_window 据此让路。
 PANEL_APIS = frozenset(('getCurrentSummoner', 'getSummonerGamesByPuuid',
-                        'getGameDetailByGameId', 'getGameflowSession'))
+                        'getGameDetailByGameId', 'getGameflowSession',
+                        'getChampionIcon'))
 
 # 伤害面板是否正在静默重试取数
 _quietFetch = False
@@ -170,9 +188,14 @@ class DamagePanelWindow(OpggWindowBase):
         self.teams = None
         self.__busy = False
         self.__pending = False
-        self.__closed = False
+        self.__shuttingDown = False
         self.__topMost = False
         self.__shownGameId = None
+        # 诊断用：记录最近一次取数走到哪一步、最后一次异常。
+        # 本仓库默认日志级别是 40(ERROR)，warning 级根本不会落盘，
+        # 所以最终失败必须以 error 级输出并把这两项带上，否则无从查起。
+        self.__lastProbe = '尚未取数'
+        self.__lastError = None
 
         self.viewTexts = {
             VIEW_DEALT: {
@@ -196,6 +219,20 @@ class DamagePanelWindow(OpggWindowBase):
         self.setWindowTitle(self.tr('伤害统计'))
         self.setWindowIcon(QIcon('app/resource/images/game.png'))
         self.setFixedWidth(640)
+        # 主窗口可能已经最小化到托盘，此时用户关掉面板就是「关掉最后一个窗口」，
+        # 默认会连带退出整个应用 —— 关面板应该是正常操作，不该退出应用
+        self.setAttribute(Qt.WA_QuitOnClose, False)
+
+        # 弹出后自动关闭（设置项，默认开启 15 秒）
+        self.__autoCloseTimer = QTimer(self)
+        self.__autoCloseTimer.setSingleShot(True)
+        self.__autoCloseTimer.timeout.connect(self.close)
+
+        # 面板还挂在屏幕上时改设置，立刻按新值重排定时器（否则要等下一局）
+        cfg.damagePanelAutoCloseDelay.valueChanged.connect(
+            self.__onAutoCloseSettingChanged)
+        cfg.enableDamagePanelAutoClose.valueChanged.connect(
+            self.__onAutoCloseSettingChanged)
 
     def __initLayout(self):
         self.subtitleLabel = QLabel(self)
@@ -239,65 +276,180 @@ class DamagePanelWindow(OpggWindowBase):
 
     # ------------------------------------------------------------------ 取数
 
-    async def __fetchGameDetail(self):
-        """拿「刚刚结束的那一局」的对局详情，拿不到返回 None"""
+    async def __fetchGameDetail(self, attempt=0):
+        """拿「刚刚结束的那一局」的对局详情，拿不到返回 None
+
+        这里有三个坑（都是拿真实对局踩出来的）：
+
+        1. 对局刚结束时，gameflow session 里已经有 gameData.gameId 了，
+           但详情接口 /lol-match-history/v1/games/{id} 对「还没结算完」的局
+           会返回一个**没有 participants 的空壳**。直接当失败处理、
+           又拿同一个 id 反复重试的话，永远拿不到数据。
+        2. 匹配历史**列表**接口的条目前只含自己那 1 个 participant，
+           不能拿来当 10 人数据用；而且列表索引到这一局也有延迟。
+        3. 本局还没进列表索引时，列表里最近一局就是**上一局**，
+           拿它当结果会弹出上一局的数据（比不弹更严重）。
+
+        所以：session 的 gameId 优先（它是权威的，不需要时间校验，只校验
+        gameId 对得上 + 人数 > 1 + 时长已结算）；只有 session 拿不到时才回退
+        匹配历史，且回退候选必须「刚刚结束」（HISTORY_TOLERANCE）。
+        每条失败路径都写进 self.__lastProbe，最终失败时随 error 日志输出。
+        """
         summoner = await connector.getCurrentSummoner()
         puuid = summoner.get('puuid')
 
         if not puuid:
+            self.__lastProbe = '拿不到当前召唤师 puuid'
             return None
 
-        # 匹配历史有延迟时 games[0] 会还是上一局。直接弹就会显示错的对局，
-        # 而且 __shownGameId 会把正确那一局永久挡掉。所以优先用 gameflow
-        # session 里的 gameId —— 那才是「刚打完这局」的权威依据。
+        reasons = []
         expectedGameId = None
 
         try:
             session = await connector.getGameflowSession()
             expectedGameId = ((session or {}).get('gameData') or {}).get('gameId')
-        except Exception:
-            expectedGameId = None
+        except (asyncio.CancelledError, SystemExit, KeyboardInterrupt):
+            raise
+        except BaseException as e:
+            # 注意：本仓库自定义异常全部继承 BaseException 而不是 Exception，
+            # 写成 except Exception 会兜不住，异常漏出去会把整个协程干掉
+            self.__lastError = f'getGameflowSession: {type(e).__name__}: {e}'
+            reasons.append(f'session 取数失败: {type(e).__name__}')
 
+        # ── 候选 1：session 里的 gameId（权威）──
         if expectedGameId:
-            game = await connector.getGameDetailByGameId(expectedGameId)
-        else:
-            games = (await connector.getSummonerGamesByPuuid(puuid, 0, 1))['games']
+            detail = await connector.getGameDetailByGameId(expectedGameId)
 
-            if not games:
+            if not isinstance(detail, dict) or not self.__sameId(
+                    detail.get('gameId'), expectedGameId):
+                reasons.append(
+                    f'session gameId={expectedGameId} 详情是空壳'
+                    f'（该局还没结算完）[{self.__detailBrief(detail)}]')
+            elif len(detail.get('participants') or []) < 2:
+                reasons.append(
+                    f'session gameId={expectedGameId} 只有 '
+                    f'{len(detail.get("participants") or [])} 个 participant')
+            elif not self.__isJustFinished(detail, SESSION_MAX_AGE, strict=True):
+                # 陈旧数据兜底：只在超过 1 小时时才拒（刚打完的局不可能超）
+                reasons.append(
+                    f'session gameId={expectedGameId} 超过时效上限'
+                    f'（{self.__endTimeBrief(detail)}）')
+            elif not (detail.get('gameDuration') or 0) and attempt < FETCH_RETRY // 2:
+                # 已入索引但时长还没结算完：前半段先等，绝不回退匹配历史 ——
+                # 那一刻列表里最近一局还是上一局
+                self.__lastProbe = (
+                    f'session gameId={expectedGameId} 已入索引但时长未结算，等下一轮')
                 return None
+            else:
+                # 后半段即使时长仍为 0 也放行：代价只是副标题显示 0:00，
+                # 伤害数据是对的；否则极短的重开局可能永远等不到
+                self.__lastProbe = (
+                    f'session gameId={expectedGameId} OK'
+                    f'（{len(detail.get("participants") or [])} 人）')
+                return detail, puuid
 
-            game = await connector.getGameDetailByGameId(games[0]['gameId'])
+        # ── 候选 2：匹配历史最近一局（只在 session 拿不到时用）──
+        try:
+            games = (await connector.getSummonerGamesByPuuid(puuid, 0, 2))['games']
+        except (asyncio.CancelledError, SystemExit, KeyboardInterrupt):
+            raise
+        except BaseException as e:
+            # 同样不能漏出去；失败就不回退，继续等 session 候选可用
+            self.__lastError = f'getSummonerGamesByPuuid: {type(e).__name__}: {e}'
+            reasons.append(f'匹配历史请求失败: {type(e).__name__}')
+            games = []
 
-        if not game.get('participants'):
-            return None
+        for game in games[:2]:
+            gameId = game.get('gameId')
 
-        if not self.__isJustFinished(game):
-            # 拿到的不是刚打完的那局（session 过期 / 匹配历史滞后），
-            # 宁可这一轮不弹，等下一次重试
-            return None
+            if not gameId or self.__sameId(gameId, expectedGameId):
+                continue
 
-        return game, puuid
+            # 回退候选必须「刚刚结束」：本局还没进索引时，列表里最近一局
+            # 就是上一局，用宽泛的 15 分钟判定会把上一局的数据弹出来。
+            # strict=True：时间字段缺失即判为不是刚结束的（fail-closed），
+            # 因为残缺条目恰恰会缺字段
+            if not self.__isJustFinished(game, HISTORY_TOLERANCE, strict=True):
+                reasons.append(
+                    f'历史 gameId={gameId} 不是刚结束的（{self.__endTimeBrief(game)}）')
+                continue
 
-    def __isJustFinished(self, game):
+            detail = await connector.getGameDetailByGameId(gameId)
+
+            if not isinstance(detail, dict) or not self.__sameId(
+                    detail.get('gameId'), gameId):
+                reasons.append(
+                    f'历史 gameId={gameId} 详情不可用[{self.__detailBrief(detail)}]')
+                continue
+
+            count = len(detail.get('participants') or [])
+
+            if count < 2:
+                reasons.append(f'历史 gameId={gameId} 只有 {count} 个 participant')
+                continue
+
+            self.__lastProbe = f'历史 gameId={gameId} OK（{count} 人）'
+            return detail, puuid
+
+        if not reasons:
+            reasons.append('没有可用的候选对局')
+
+        # 把每个候选失败的原因都留下，日志里能看到完整判断过程
+        self.__lastProbe = '候选对局都不可用: ' + '; '.join(reasons)
+
+        return None
+
+    @staticmethod
+    def __sameId(a, b):
+        """gameId 可能是 int 也可能是 str，直接 != 会把「已就绪」误判成「空壳」"""
+        return a is not None and b is not None and str(a) == str(b)
+
+    @staticmethod
+    def __detailBrief(detail):
+        """空壳到底是 404、errorCode 还是别的，记下来才知道怎么对症"""
+        if not isinstance(detail, dict):
+            return f'响应类型 {type(detail).__name__}'
+
+        keys = ','.join(sorted(detail.keys())[:6])
+        err = (detail.get('errorCode') or detail.get('httpStatus')
+               or detail.get('message'))
+
+        return f'keys={keys}' + (f' err={err}' if err else '')
+
+    @staticmethod
+    def __endTimeBrief(game):
+        creation = game.get('gameCreation') or 0
+        duration = game.get('gameDuration') or 0
+        end = (creation + duration * 1000) / 1000
+
+        return (f'结束于 {time.strftime("%m-%d %H:%M", time.localtime(end))}，'
+                f'距今 {(time.time() - end) / 60:.0f} 分钟')
+
+    def __isJustFinished(self, game, tolerance, strict=False):
         """这局是不是刚刚结束的？
 
         用 gameCreation + gameDuration 得到结束时间，和当前时间比。
         刚打完的局误差只有几秒；如果是上一局，通常会差几十分钟。
-        时钟可能和服务器有偏差，所以给 15 分钟宽限。
+
+        时钟可能和服务器有偏差，所以留一点宽限；宽限大小由调用方给 ——
+        「防弹上一局」的判据必须用很小的值（见 HISTORY_TOLERANCE）。
+
+        strict=True 时，时间字段缺失或无效一律判为「不是刚结束的」：
+        LCU 的残缺/空壳条目恰恰会缺这些字段，fail-open 会放进错误对局。
         """
         try:
             creation = float(game.get('gameCreation') or 0)
             duration = float(game.get('gameDuration') or 0)
         except (TypeError, ValueError):
-            return True
+            return not strict
 
         if creation <= 0:
-            return True
+            return not strict
 
         endTime = (creation + duration * 1000) / 1000
         now = time.time()
 
-        return -60 <= (now - endTime) <= 15 * 60
+        return -60 <= (now - endTime) <= tolerance
 
     async def __buildData(self, game, myPuuid):
         """把对局详情整理成面板数据"""
@@ -446,7 +598,7 @@ class DamagePanelWindow(OpggWindowBase):
         """重试若干次去取数；成功弹出返回 True"""
         for attempt in range(FETCH_RETRY):
             try:
-                detail = await self.__fetchGameDetail()
+                detail = await self.__fetchGameDetail(attempt)
 
                 if detail:
                     data = await self.__buildData(*detail)
@@ -459,31 +611,142 @@ class DamagePanelWindow(OpggWindowBase):
                         if gameId is not None and gameId == self.__shownGameId:
                             return True
 
-                        self.__shownGameId = gameId
-
-                        if self.__closed:
-                            # 面板已经被关掉了（比如用户关了应用），别再 show 出幽灵窗口
+                        if self.__shuttingDown:
+                            # 应用正在退出，别再 show 出幽灵窗口
                             return True
 
-                        self.setData(data)
-                        # 先摆好位置再置顶：setStayOnTop() 内部会调用 show()，
-                        # 顺序反了会先在默认位置闪一下
-                        self.adjustPosition()
-                        self.__ensureStayOnTop()
-                        self.show()
-                        self.raise_()
+                        self.__showPanel(data)
+
+                        # 必须放在「确认真的显示出来了」之后：
+                        # 之前记在 show() 之前，一旦中间抛异常，重试时会因为
+                        # gameId 相同而直接判定「已弹过」并静默放弃，
+                        # 留下一个「有数据、已定位、已置顶、但不可见」的窗口。
+                        self.__shownGameId = gameId
+
                         return True
-            except Exception as e:
+                    else:
+                        # __buildData 解析不出队伍时不抛异常，不加这句的话
+                        # __lastProbe 会停在「…OK（10 人）」，最终日志自相矛盾
+                        self.__lastProbe += ' | __buildData 解析不出面板数据'
+            except (asyncio.CancelledError, SystemExit, KeyboardInterrupt):
+                # 取消不是取数失败，必须原样放出去
+                raise
+            except BaseException as e:
+                # 必须用 BaseException：本仓库自定义异常（SummonerGamesNotFound、
+                # RetryMaximumAttempts 等）全部继承 BaseException 而不是 Exception，
+                # 写成 except Exception 会让它们直接干掉整个协程，
+                # 连下面那条汇总 error 日志都留不下来 —— 那正是最难查的静默失败
+                self.__lastError = f'{type(e).__name__}: {e}'
                 logger.warning(f'伤害面板第 {attempt + 1} 次取数失败: {e}', TAG)
 
             await asyncio.sleep(FETCH_INTERVAL)
 
-        logger.warning('伤害面板: 重试耗尽，仍未拿到结算数据', TAG)
+        # 用 error 级：本仓库默认日志级别是 40，warning 不会落盘，
+        # 那样「面板没弹」就成了完全无从查起的静默失败
+        logger.error(
+            f'对局伤害面板: 重试 {FETCH_RETRY} 次仍未弹出。'
+            f'取数过程: {self.__lastProbe}'
+            + (f' | 最后一次异常: {self.__lastError}' if self.__lastError else ''),
+            TAG)
 
         return False
 
+    def blockShowing(self):
+        """应用正在退出时调用，阻止面板再被显示出来（避免退出瞬间闪出幽灵窗口）。
+
+        注意：不要用 closeEvent 来判断 —— 用户手动关掉面板是正常操作，
+        不该因此让这个面板在本次运行里再也不出现。
+        """
+        self.__shuttingDown = True
+
+    def __showPanel(self, data):
+        """填数据、定位、置顶、显示，并确认窗口真的可见了
+
+        自检必须查到 Win32 层：实测出现过「Qt 的 isVisible() 为真、
+        但原生窗口 IsWindowVisible 为假」的状态 —— 只信 Qt 的话，
+        自检会通过、__shownGameId 被置位、自愈也就失效了。
+        """
+        self.setData(data)
+        # 先摆好位置再置顶：setStayOnTop() 内部会调用 show()，
+        # 顺序反了会先在默认位置闪一下
+        self.adjustPosition()
+        self.__ensureStayOnTop()
+        self.show()
+        self.raise_()
+
+        # 先武装自动关闭定时器：下面显示自检在「一切正常」时会提前 return，
+        # 放在末尾的话正常路径反而永远不启动定时器
+        self.__restartAutoCloseTimer()
+
+        hwnd = int(self.winId())
+
+        # 自检绝不能反过来影响显示本身，所以整段都兜住
+        try:
+            qtVisible = self.isVisible()
+            nativeVisible = win32gui.IsWindowVisible(hwnd)
+        except BaseException as e:
+            logger.error(f'对局伤害面板: 显示自检失败: {type(e).__name__}: {e}', TAG)
+            return
+
+        if qtVisible and nativeVisible:
+            return
+
+        # 两层都查：实测出现过「Qt 认为可见、原生窗口被隐藏」，
+        # 反向不一致（Qt 隐藏、原生可见）也要一起补
+        logger.error(
+            f'对局伤害面板: 窗口未真正显示'
+            f'(Qt isVisible={qtVisible} isHidden={self.isHidden()} '
+            f'Win32 visible={nativeVisible} '
+            f'flags={int(self.windowFlags()):#x} '
+            f'geometry={self.geometry().x()},{self.geometry().y()} '
+            f'{self.geometry().width()}x{self.geometry().height()})，正在兜底显示', TAG)
+
+        try:
+            if not qtVisible:
+                self.show()
+                self.raise_()
+
+            if not win32gui.IsWindowVisible(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+        except BaseException as e:
+            logger.error(
+                f'对局伤害面板: 兜底显示失败: {type(e).__name__}: {e}', TAG)
+            return
+
+        try:
+            if not (self.isVisible() and win32gui.IsWindowVisible(hwnd)):
+                logger.error(
+                    f'对局伤害面板: 兜底显示后窗口仍不可见 (hwnd={hwnd})', TAG)
+        except BaseException:
+            pass
+
+    def __onAutoCloseSettingChanged(self, *_):
+        """设置页改了自动关闭相关项：面板正显示着就立刻生效"""
+        if self.isVisible():
+            self.__restartAutoCloseTimer()
+
+    def __restartAutoCloseTimer(self):
+        """按设置定时自动关闭面板
+
+        每次弹出都重新读一遍配置，这样改完设置下一局就生效，
+        不需要重启应用。设置项本身在设置页的二级菜单里（默认开启 15 秒）。
+        """
+        self.__autoCloseTimer.stop()
+
+        if not cfg.get(cfg.enableDamagePanelAutoClose):
+            return
+
+        try:
+            delay = int(cfg.get(cfg.damagePanelAutoCloseDelay) or 0)
+        except (TypeError, ValueError):
+            delay = 0
+
+        if delay > 0:
+            self.__autoCloseTimer.start(delay * 1000)
+
     def closeEvent(self, e):
-        self.__closed = True
+        # 窗口关了就别留着定时器（用户手动关闭时同样停掉）
+        self.__autoCloseTimer.stop()
 
         return super().closeEvent(e)
 
