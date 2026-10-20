@@ -802,6 +802,10 @@ class MainWindow(FluentWindow):
         elif status == 'ChampSelect':
             title = self.tr("Selecting Champions")
 
+            # 先清空备选池窗口，放在下一个 await 之前；
+            # 否则 getMapSide 期间到达的 champSelectChanged 会被这里清掉
+            self.aramBenchWindow.clearBench()
+
             # 在标题添加所处队伍
             side = await connector.getMapSide()
             if side:
@@ -888,10 +892,18 @@ class MainWindow(FluentWindow):
         self.championSelection.reset()
         self.aramBenchState.reset()
 
-        # 清空备选池窗口
-        self.aramBenchWindow.clearBench()
-
         session = await connector.getChampSelectSession()
+
+        # 大乱斗模式：先弹出备选池窗口
+        if session.get('benchEnabled') and cfg.get(cfg.enableAramAutoSwap):
+            self.aramBenchWindow.adjustPosition()
+            self.aramBenchWindow.show()
+            self.aramBenchWindow.raise_()
+
+        # 首帧 session 的倒计时先点亮
+        if session.get('benchEnabled') and (
+                cfg.get(cfg.enableAramAutoSwap) or self.aramBenchWindow.isVisible()):
+            self.aramBenchWindow.updateTimer(session.get('timer', {}))
 
         if cfg.get(cfg.autoShowOpgg):
             # 判断当前是否为召唤师峡谷模式，只有召唤师峡谷才自动弹出
@@ -909,12 +921,6 @@ class MainWindow(FluentWindow):
             if isSummonersRift:
                 self.opggWindow.show()
 
-        # 大乱斗模式：自动弹出备选池窗口
-        if session.get('benchEnabled') and cfg.get(cfg.enableAramAutoSwap):
-            self.aramBenchWindow.adjustPosition()
-            self.aramBenchWindow.show()
-            self.aramBenchWindow.raise_()
-
         currentSummonerId = self.currentSummoner['summonerId']
         info = await parseAllyGameInfo(session, currentSummonerId, useSGP=True)
         self.gameInfoInterface.updateAllySummoners(info)
@@ -929,28 +935,59 @@ class MainWindow(FluentWindow):
         # 大乱斗自动抢选（在所有阶段之前检测）
         swapped = await autoBenchSwap(data, self.aramBenchState)
         if swapped:
-            self.aramBenchWindow.updateStatus(self.tr("已抢选成功！"))
+            self.aramBenchWindow.updateStatus(self.tr("已抢选成功！"), "success")
 
         # 大乱斗模式：更新备选池窗口
-        if data.get('benchEnabled') and cfg.get(cfg.enableAramAutoSwap):
-            benchChampions = data.get('benchChampions', [])
-            if benchChampions:
-                # 获取英雄图标路径
-                benchChampionsWithIcons = []
-                for champ in benchChampions:
-                    championId = champ.get('championId', 0)
-                    if championId > 0:
-                        icon = await connector.getChampionIcon(championId)
-                        benchChampionsWithIcons.append({
-                            'championId': championId,
-                            'icon': icon
-                        })
-                if benchChampionsWithIcons:
-                    self.aramBenchWindow.updateBenchChampions(benchChampionsWithIcons)
+        # 窗口可见时即使关掉自动抢选也要继续刷新，否则手动换英雄会看到冻结的数据
+        if data.get('benchEnabled') and (
+                cfg.get(cfg.enableAramAutoSwap) or self.aramBenchWindow.isVisible()):
+            benchChampions = data.get('benchChampions') or []
 
-            # 更新倒计时
+            # 1. 先用本地图标路径立即上屏，别让图标下载/重试把整排卡片卡住
+            benchPayload = []
+            for champ in benchChampions:
+                rawId = champ.get('championId', 0) if isinstance(champ, dict) else champ
+                try:
+                    championId = int(rawId)
+                except (TypeError, ValueError):
+                    continue
+                if championId > 0:
+                    benchPayload.append({
+                        'championId': championId,
+                        'icon': f'app/resource/game/champion icons/{championId}.png'
+                    })
+            if benchPayload:
+                self.aramBenchWindow.updateBenchChampions(benchPayload)
+
+            # 2. 倒计时：此时卡片已是本帧数据，FINALIZATION 预抢不会读旧卡
             timer = data.get('timer', {})
             self.aramBenchWindow.updateTimer(timer)
+
+            # 3. 再补真实图标；单个图标失败不拖垮整排卡片
+            if benchChampions:
+                benchChampionsWithIcons = []
+                for champ in benchChampions:
+                    rawId = champ.get('championId', 0) if isinstance(champ, dict) else champ
+                    try:
+                        championId = int(rawId)
+                    except (TypeError, ValueError):
+                        continue
+                    if championId <= 0:
+                        continue
+
+                    try:
+                        icon = await connector.getChampionIcon(championId)
+                    except Exception as e:
+                        logger.error(f'获取备选池英雄图标失败 {championId}: {e}', TAG)
+                        icon = f'app/resource/game/champion icons/{championId}.png'
+
+                    benchChampionsWithIcons.append({
+                        'championId': championId,
+                        'icon': icon
+                    })
+
+                if benchChampionsWithIcons:
+                    self.aramBenchWindow.updateBenchChampions(benchChampionsWithIcons)
 
         phase = {
             'PLANNING': [autoShow],

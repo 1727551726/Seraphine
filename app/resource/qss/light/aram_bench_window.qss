@@ -1,0 +1,52 @@
+#titleLabel {
+    color: black;
+}
+
+#heroCard {
+    background-color: rgba(255, 255, 255, 184);
+    border: 1px solid rgba(0, 0, 0, 28);
+    border-radius: 6px;
+}
+
+#heroKicker,
+#heroHint,
+#autoLabel,
+#targetsLabel,
+#benchCount {
+    color: rgb(131, 131, 131);
+}
+
+#heroPhase,
+#benchTitle {
+    color: black;
+}
+
+#targetChip {
+    background-color: rgba(0, 0, 0, 11);
+    border: 1px solid transparent;
+    border-radius: 3px;
+}
+
+#targetChip[inPool="true"] {
+    border: 1px solid --ThemeColorPrimary;
+}
+
+#targetChipFallback {
+    background-color: rgba(0, 0, 0, 12);
+    border-radius: 3px;
+    color: rgb(120, 95, 50);
+}
+
+#emptyState {
+    background-color: rgba(255, 255, 255, 184);
+    border: 1px dashed rgba(0, 0, 0, 30);
+    border-radius: 6px;
+}
+
+#emptyTitle {
+    color: rgb(100, 100, 100);
+}
+
+#emptyHint {
+    color: rgb(131, 131, 131);
+}

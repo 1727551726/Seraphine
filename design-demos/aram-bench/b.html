@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Seraphine · 大乱斗英雄备选池小窗 · 方案 B（极简条）</title>
+
+<!--
+  ============================================================================
+  Seraphine · 大乱斗英雄备选池小窗 — 方案 B「极简条」HTML 高保真预览
+  ============================================================================
+
+  【这个文件是什么】
+  单方案预览页：只保留 B 版。深色 / 浅色一键切换，六种运行时状态一键切换，
+  点卡片可模拟一次抢选。倒计时按动画时钟推进：数字按秒取整，
+  进度条用 transform + Web Animations 在合成线程上线性移动。
+  本文件不修改 app/ 下任何代码。
+
+  【对照的现状】
+  app/view/aram_bench_window.py（AramBenchWindow）
+    · setFixedSize(360, 480)，OpggWindowBase + FluentTitleBar（标题栏 48px）
+    · 5 列 QGridLayout、ClickableChampionIcon 56px、只有头像没有名字
+    · 「剩余时间: 23秒」11px 灰字 + 一根无轨道的 SmoothProgressBar(8px)
+    · 状态是 11px 灰字：「等待英雄上架...」「已抢选成功！」
+    · 期望英雄在窗口最底部，RoundIcon 28px，前面一个「期望英雄:」标签
+    · SwitchButton 42×22 放在状态下面，vBoxLayout 末尾 addStretch 吃掉了空白
+    · 进度条颜色写死 #009688
+
+  【B 的信息结构（为什么是这几行）】
+    1) 时间在最上：标签在上、数字 31px、4px 进度条紧贴数字 —— 三者是一组
+    2) 备选池标题行右侧直接承载状态 —— 省掉单独的状态行，状态就在刚点过的
+       卡片上方，失败/成功不必再往下找
+    3) 数量回到池头（「9 位」和池子在一起），页脚只留优先目标
+    4) 高度按池子行数伸缩：1–5 位 277、6–10 位 362；实机窗口锚在客户端
+       右下角，应保底边不动、只改顶边
+
+  【倒计时为什么之前不连贯，这次怎么改的】
+    本页：第一版用 setInterval(1000) 减 1，进度条每秒跳一次。第二版改成
+      RAF 逐帧写 width，仍然看得出台阶 —— 因为 width 走布局，慢速时
+      （约 7px/s）会被取整成 1px 一跳。现在用 translateX + Web Animations：
+      条的位移跑在合成线程上，线性推进、亚像素渲染；数字仍按「剩余秒数取整」
+      每秒变一次，文字从动画时钟读数，两者不会走散。
+    实机：qfluentwidgets 的 ProgressBar.setValue() 内部会
+        self.ani.stop(); ani.setEndValue(v); ani.setDuration(150); ani.start()
+      也就是说每调一次 setValue 就重启一次 150ms 动画。当前窗口用 50ms
+      QTimer 调 setValue，动画永远来不及走完就被重启 —— 画出来的值滞后、
+      一卡一卡。平滑的正确做法是 setUseAni(False) 后直接更新，或者
+      绕过 setValue 用 setVal(float)（它只设 _val + update()），
+      由 16–50ms 的 QTimer 驱动；SmoothProgressBar 的 paintEvent 读的就是
+      val，所以 setVal 这条路是现成的。
+
+  【设计 token 来源（全部取自仓库现有规范，未凭空发明颜色）】
+    - 主题色      #009faa === qfluentwidgets qconfig.themeColor 默认值
+    - 字体        'Segoe UI','Microsoft YaHei'，基础 14px（design.md）
+    - 圆角        卡片 6px / 按钮 5-6px / 图标 3-4px（design.md）
+    - 标题栏      48px（qfluentwidgets FluentTitleBar setFixedHeight(48)）
+                  本版压到 36px：小窗是 HUD，垂直空间比品牌感更值钱
+    - 开关        SwitchButton 42×22（qfluentwidgets switch_button.py）
+    - 深色边框    rgb(35,35,35)~rgb(82,82,82)，实现为 rgba(255,255,255,.11)
+                  亮色边框 rgba(0,0,0,.095)，实现为 rgba(0,0,0,.11)
+    - 深色文字    white / rgb(200,200,200) / rgb(176,176,177)
+    - 亮色文字    black / rgb(100,100,100) / rgb(131,131,131)
+    - hover 覆盖  dark rgba(255,255,255,.084) / light rgba(233,233,233,.5)
+    - 窗口圆角    8px（Win11 DWM 圆角），卡片 6px
+    - 关闭按钮    Fluent 关闭按钮 hover 为 #c42b1c 红底白图标
+
+  【数据 / 素材】
+    · 英雄图标：仓库真实资源 app/resource/game/champion icons/{championId}.png
+      （128×128，与实机 updateBenchChampions 拿到的是同一批）
+    · 备选池 6 位英雄、优先目标 3 位、倒计时秒数均为演示数据；
+      名称用于验证排版，不是断言 LCU 字段。
+    · 倒计时分母按 45 秒示意。实机 updateTimer() 已有 maxTime
+      （首次收到 adjustedTimeLeftInPhase 时的值），比例应该用 maxTime。
+
+  【本页刻意没做的事】
+    · 没写「6/10」这种容量分母：上限随版本/模式变化，未核实前只显示「6 位」
+    · 没给优先目标分优先级视觉：desiredChampions 是有序列表，但多目标同时
+      上架时该先抢谁，UI 没表达；本页只标「在池」
+    · 没有新增「收起 / 置顶 / 手动刷新」这类功能
+-->
+
+<style>
+/* ===========================================================================
+   0. 设计 token
+   =========================================================================== */
+:root{
+  --theme:#009faa;                    /* qfluentwidgets 主题色默认值 */
+  --theme-tint:rgba(0,159,170,.12);
+  --theme-soft:rgba(0,159,170,.45);
+
+  --r-win:8px;                        /* 窗口圆角（Win11） */
+  --r-card:6px;                       /* 卡片 / 面板 */
+  --r-ico:3px;                        /* 小图标 */
+
+  --font:'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif;
+  --mono:'Cascadia Mono','Consolas',monospace;
+}
+
+/* 深色主题 —— 取自 app/resource/qss/dark + design.md */
+body[data-theme="dark"]{
+  --page:#101113;
+  --rule:rgba(255,255,255,.09);
+  --stage-bg:#2a2e34;
+  --blob-a:rgba(0,159,170,.30);
+  --blob-b:rgba(198,150,84,.16);
+
+  --win-bg:rgba(22,24,28,.72);        /* 模拟 Mica：半透明 + 背景模糊 */
+  --win-border:rgba(255,255,255,.14);
+  --win-edge:inset 0 1px 0 rgba(255,255,255,.10);
+  --surface:rgba(255,255,255,.055);
+  --border:rgba(255,255,255,.11);
+  --row-hover:rgba(255,255,255,.084);
+  --track:rgba(255,255,255,.18);
+  --chip-bg:rgba(255,255,255,.06);
+  --code-bg:rgba(255,255,255,.07);
+
+  --text-1:#ffffff;
+  --text-2:rgb(200,200,200);
+  --text-3:rgb(176,176,177);
+
+  --ok:#4cc22b;
+  --err:#ff8d8d;
+  --warn:#ffc24b;
+
+  --sw-off:rgba(255,255,255,.20);
+  --sw-knob:#ffffff;
+  --shadow:0 22px 56px rgba(0,0,0,.55), 0 2px 10px rgba(0,0,0,.35);
+  --seg-bg:rgba(255,255,255,.05);
+  --seg-on:rgba(255,255,255,.11);
+}
+
+/* 亮色主题 —— 取自 app/resource/qss/light + design.md */
+body[data-theme="light"]{
+  --page:#eceef0;
+  --rule:rgba(0,0,0,.10);
+  --stage-bg:#d9dde3;
+  --blob-a:rgba(0,159,170,.32);
+  --blob-b:rgba(186,146,86,.18);
+
+  --win-bg:rgba(252,252,253,.80);
+  --win-border:rgba(0,0,0,.13);
+  --win-edge:inset 0 1px 0 rgba(255,255,255,.75);
+  --surface:rgba(255,255,255,.72);
+  --border:rgba(0,0,0,.11);
+  --row-hover:rgba(233,233,233,.5);
+  --track:rgba(0,0,0,.12);
+  --chip-bg:rgba(0,0,0,.045);
+  --code-bg:rgba(0,0,0,.06);
+
+  --text-1:#000000;
+  --text-2:rgb(100,100,100);
+  --text-3:rgb(131,131,131);
+
+  --ok:#1c6f0b;
+  --err:#b60000;
+  --warn:#8a5a00;
+
+  --sw-off:rgba(0,0,0,.22);
+  --sw-knob:#ffffff;
+  --shadow:0 18px 44px rgba(30,42,52,.20), 0 2px 8px rgba(30,42,52,.10);
+  --seg-bg:rgba(0,0,0,.045);
+  --seg-on:#ffffff;
+}
+
+/* ===========================================================================
+   1. 画板（不是产品的一部分）
+   =========================================================================== */
+*,*::before,*::after{box-sizing:border-box}
+
+html,body{margin:0}
+body{
+  background:var(--page);
+  color:var(--text-1);
+  font:14px/1.5 var(--font);
+  -webkit-font-smoothing:antialiased;
+  transition:background-color .2s ease;
+}
+
+.board{max-width:1460px;margin:0 auto;padding:26px 24px 56px}
+
+.board-head{
+  display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;
+  gap:18px 32px;padding-bottom:18px;border-bottom:1px solid var(--rule);
+}
+.board-head h1{margin:0 0 7px;font-size:19px;font-weight:600;letter-spacing:.01em}
+.ver{
+  display:inline-block;margin-left:8px;vertical-align:2px;
+  font:10px/1 var(--mono);letter-spacing:.06em;
+  padding:3px 6px;border-radius:4px;
+  background:var(--chip-bg);color:var(--text-3);border:1px solid var(--rule);
+}
+.board-sub{
+  margin:0;font-size:12px;color:var(--text-3);line-height:1.75;max-width:660px;
+}
+.board-sub b{color:var(--text-2);font-weight:600}
+code{
+  display:inline-block;font:11px/1 var(--mono);
+  padding:2px 5px;border-radius:var(--r-ico);
+  background:var(--code-bg);color:var(--text-2);
+}
+
+.ctls{display:flex;flex-wrap:wrap;gap:10px 16px}
+.ctl{display:flex;align-items:center;gap:8px}
+.ctl-k{font-size:11px;color:var(--text-3);letter-spacing:.04em;white-space:nowrap}
+.seg{
+  display:flex;gap:2px;padding:2px;
+  background:var(--seg-bg);border:1px solid var(--rule);border-radius:6px;
+}
+.seg button{
+  appearance:none;border:0;border-radius:4px;
+  background:transparent;color:var(--text-3);
+  font:12px/1 var(--font);padding:6px 10px;cursor:pointer;
+  transition:background-color .12s ease,color .12s ease;
+  white-space:nowrap;
+}
+.seg button:hover{color:var(--text-1)}
+.seg button[aria-pressed="true"]{background:var(--seg-on);color:var(--text-1)}
+.seg button:focus-visible{outline:2px solid var(--theme);outline-offset:1px}
+
+/* ===========================================================================
+   2. 预览区 + 说明栏
+   =========================================================================== */
+.board-main{padding-top:24px}
+
+.stage{
+  position:relative;
+  width:420px;max-width:100%;margin:0 auto;
+  padding:26px 30px;border-radius:12px;
+  background:var(--stage-bg);
+  border:1px solid var(--rule);
+  overflow:hidden;
+}
+/* 两块很淡的色斑，只为了让「半透明 + 背景模糊」读得出来 */
+.stage::before{
+  content:'';position:absolute;inset:-30%;pointer-events:none;
+  background:
+    radial-gradient(36% 30% at 24% 32%, var(--blob-a), transparent 70%),
+    radial-gradient(32% 28% at 76% 70%, var(--blob-b), transparent 70%);
+  filter:blur(8px);
+}
+
+.stage-cap{
+  position:relative;z-index:1;
+  display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;
+  margin:0 0 12px 2px;font-size:11px;letter-spacing:.08em;
+  color:var(--text-3);text-transform:uppercase;
+}
+.stage-cap b{font-size:12px;font-weight:600;color:var(--text-2);letter-spacing:.02em}
+.stage-cap .dim{text-transform:none;letter-spacing:0;opacity:.8}
+
+.win{
+  position:relative;z-index:1;
+  display:flex;flex-direction:column;
+  width:360px;height:362px;
+  border:1px solid var(--win-border);
+  border-radius:var(--r-win);
+  background:var(--win-bg);
+  -webkit-backdrop-filter:blur(26px) saturate(1.25);
+  backdrop-filter:blur(26px) saturate(1.25);
+  box-shadow:var(--win-edge), var(--shadow);
+  overflow:hidden;
+  animation:win-rise .45s cubic-bezier(.16,1,.3,1) both;
+  /* 高度跟池子行数走：1 行 277 / 2 行 362 */
+  transition:height .24s cubic-bezier(.16,1,.3,1);
+}
+.win.is-one-row{height:277px}
+@keyframes win-rise{from{opacity:0;transform:translateY(10px) scale(.992)}to{opacity:1;transform:none}}
+
+/* 标题栏：FluentTitleBar 48px → 36px，保留拖动区与 min/close */
+.tb{flex:0 0 auto;display:flex;align-items:center;gap:8px;height:36px;padding-left:13px}
+.tb-ico{width:16px;height:16px;border-radius:3px;object-fit:cover;flex:0 0 auto}
+.tb-title{
+  flex:1;min-width:0;font-size:12px;color:var(--text-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.tb-actions{display:flex;align-self:stretch;flex:0 0 auto}
+.tb-btn{
+  width:40px;padding:0;border:0;background:transparent;color:var(--text-2);
+  display:grid;place-items:center;cursor:pointer;
+  transition:background-color .1s ease,color .1s ease;
+}
+.tb-btn:hover{background:var(--row-hover);color:var(--text-1)}
+.tb-btn.tb-close:hover{background:#c42b1c;color:#fff}
+.tb-btn:focus-visible{outline:2px solid var(--theme);outline-offset:-2px}
+.tb-btn svg{width:12px;height:12px;display:block}
+
+/* ===========================================================================
+   3. 窗口内容（B）
+   =========================================================================== */
+.win-body{
+  flex:1;display:flex;flex-direction:column;min-height:0;
+  padding:10px 12px 12px;gap:0;
+}
+
+/* ---- 自动抢选开关（复刻 SwitchButton 42×22，圆角 = 高/2） ---- */
+.b-top{display:flex;align-items:center;gap:10px;flex:0 0 auto}
+.auto{display:flex;align-items:center;gap:6px;flex:0 0 auto;margin-left:auto}
+.auto-l{font-size:11px;color:var(--text-2);white-space:nowrap}
+.sw{
+  position:relative;flex:0 0 auto;width:42px;height:22px;padding:0;
+  border:0;border-radius:11px;background:var(--sw-off);
+  cursor:pointer;transition:background-color .16s ease;
+}
+.sw::after{
+  content:'';position:absolute;top:50%;left:4px;width:14px;height:14px;
+  margin-top:-7px;border-radius:50%;background:var(--sw-knob);
+  box-shadow:0 1px 2px rgba(0,0,0,.25);
+  transition:left .16s cubic-bezier(.16,1,.3,1);
+}
+.sw[aria-checked="true"]{background:var(--theme)}
+.sw[aria-checked="true"]::after{left:24px}
+.sw:focus-visible{outline:2px solid var(--theme);outline-offset:2px}
+
+/* ---- 倒计时：标签在上、数字在下、条紧贴数字 ---- */
+.timebox{display:flex;flex-direction:column;gap:1px;flex:0 0 auto}
+.timebox span{font-size:11px;letter-spacing:.01em;color:var(--text-3)}
+.timebox b{
+  font-size:31px;line-height:1.02;font-weight:600;color:var(--text-1);
+  font-variant-numeric:tabular-nums;letter-spacing:.01em;
+  transition:color .18s ease;
+}
+.timebox.is-urgent b{color:var(--warn)}
+.track{
+  position:relative;
+  height:4px;border-radius:2px;background:var(--track);overflow:hidden;
+  flex:0 0 auto;margin-top:6px;
+}
+.track i{
+  display:block;height:100%;width:100%;border-radius:2px;
+  background:var(--theme);
+  /* 用位移而不是 width：
+     - width 每帧改会触发布局 + 像素取整，慢速时（约 7px/s）会 1px 一跳
+     - translateX + Web Animations 跑在合成线程上，线性推进、亚像素渲染 */
+  transform:translateX(-100%);
+  transition:background-color .18s ease;
+  will-change:transform;
+}
+.track.is-urgent i{background:var(--warn)}
+
+/* ---- 备选池标题行：数量在左，状态在右 ---- */
+.b-head{
+  display:flex;align-items:center;gap:6px;
+  margin-top:9px;min-height:18px;flex:0 0 auto;
+}
+.sec-t{font-size:12px;font-weight:600;color:var(--text-1)}
+.sec-n{font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums}
+.b-head .status{flex:1;min-width:0;justify-content:flex-end;min-height:0;font-size:12px}
+.b-head .status svg{width:13px;height:13px}
+.b-head .mini-spin{width:12px;height:12px}
+
+/* ---- 状态行 ---- */
+.status{
+  display:flex;align-items:center;gap:7px;flex:0 0 auto;
+  font-size:12px;color:var(--text-3);
+  transition:color .15s ease;
+}
+.status svg{width:14px;height:14px;flex:0 0 auto}
+.status-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.status[data-kind="success"]{color:var(--ok)}
+.status[data-kind="error"]{color:var(--err)}
+.status[data-kind="warn"]{color:var(--warn)}
+.status[data-kind="info"]{color:var(--text-2)}
+.mini-spin{
+  flex:0 0 auto;width:12px;height:12px;border-radius:50%;
+  border:2px solid var(--track);border-top-color:var(--theme);
+  animation:spin .8s linear infinite;
+}
+.dot-muted{
+  flex:0 0 auto;width:6px;height:6px;border-radius:50%;
+  background:var(--text-3);opacity:.65;margin:0 4px;
+}
+
+/* ---- 英雄卡片：5 列，名字在卡片下方 ---- */
+.grid{
+  display:grid;grid-template-columns:repeat(5,1fr);gap:5px;
+  margin-top:6px;flex:0 0 auto;
+}
+.card{
+  display:flex;flex-direction:column;gap:3px;min-width:0;
+  padding:0;border:0;background:transparent;color:inherit;font:inherit;
+  text-align:center;cursor:pointer;border-radius:var(--r-card);
+}
+.card .thumb{
+  position:relative;display:block;aspect-ratio:1/1;
+  border-radius:var(--r-card);overflow:hidden;
+  border:1px solid var(--border);background:#0d0f12;
+  transition:border-color .13s ease,box-shadow .13s ease,transform .1s ease;
+}
+.card .thumb img{display:block;width:100%;height:100%;object-fit:cover}
+.card .cname{
+  font-size:11px;line-height:1.3;color:var(--text-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:color .13s ease;
+}
+.card:hover .thumb{border-color:var(--theme);box-shadow:0 0 0 1px var(--theme)}
+.card:hover .cname{color:var(--text-1)}
+.card:active .thumb{transform:scale(.97)}
+.card:focus-visible{outline:2px solid var(--theme);outline-offset:3px}
+.card.is-target .thumb{border-color:var(--theme);box-shadow:inset 0 0 0 1px var(--theme)}
+.card .badge{
+  position:absolute;top:4px;right:4px;pointer-events:none;
+  font-size:9px;line-height:1;letter-spacing:.02em;
+  padding:2px 4px;border-radius:3px;
+  background:rgba(0,0,0,.62);border:1px solid rgba(0,159,170,.55);
+  color:#8fe0e8;
+}
+.card .spinner{
+  position:absolute;top:50%;left:50%;width:18px;height:18px;margin:-9px 0 0 -9px;
+  border-radius:50%;border:2px solid rgba(255,255,255,.28);
+  border-top-color:#fff;animation:spin .7s linear infinite;
+}
+.card.is-busy .thumb img{filter:brightness(.5)}
+.card.is-busy .cname{color:var(--text-2)}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 更换进行中：其它卡片一起锁住，避免连点打出第二个请求 */
+.grid.is-locked .card:not(.is-busy){opacity:.42;filter:saturate(.5);pointer-events:none}
+
+/* 图片挂了就退回首字色块，不画烂 SVG */
+.thumb.no-img::after{
+  content:attr(data-letter);position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;font-weight:600;color:#d8c9a3;background:#1e232b;
+}
+
+/* ---- 空状态 ---- */
+.empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:6px;min-height:168px;margin-top:6px;padding:16px;text-align:center;
+  border:1px dashed var(--border);border-radius:var(--r-card);
+  background:var(--surface);
+}
+.empty-t{font-size:12px;color:var(--text-2)}
+.empty-s{font-size:11px;color:var(--text-3)}
+.pulse{
+  width:6px;height:6px;border-radius:50%;background:var(--theme);
+  box-shadow:0 0 0 0 rgba(0,159,170,.55);
+  animation:pulse 1.9s ease-out infinite;
+}
+@keyframes pulse{
+  70%{box-shadow:0 0 0 9px rgba(0,159,170,0)}
+  100%{box-shadow:0 0 0 0 rgba(0,159,170,0)}
+}
+
+/* ---- 页脚：只有优先目标 ---- */
+.b-foot{
+  display:flex;align-items:center;gap:8px;flex:0 0 auto;
+  margin-top:auto;padding-top:9px;border-top:1px solid var(--border);
+}
+.sec-k{
+  display:inline-flex;align-items:center;gap:4px;flex:0 0 auto;
+  font-size:11px;color:var(--text-3);
+}
+.sec-k svg{width:12px;height:12px;display:block;opacity:.85}
+.chips{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.chip{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:2px 7px 2px 2px;border-radius:var(--r-ico);
+  background:var(--chip-bg);border:1px solid transparent;
+  font-size:11px;color:var(--text-2);white-space:nowrap;
+  transition:border-color .15s ease,background-color .15s ease,color .15s ease;
+}
+.chip img{display:block;width:22px;height:22px;border-radius:3px;object-fit:cover}
+.chip.is-in{border-color:var(--theme-soft);background:var(--theme-tint);color:var(--text-1)}
+
+/* ===========================================================================
+   4. 说明栏
+   =========================================================================== */
+.notes{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+  gap:26px 36px;margin-top:38px;padding-top:24px;
+  border-top:1px solid var(--rule);
+}
+.note-col h3{
+  margin:0 0 10px;font-size:11px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--text-3);
+}
+.note-col ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:7px}
+.note-col li{
+  position:relative;padding-left:13px;
+  font-size:12px;line-height:1.7;color:var(--text-2);
+}
+.note-col li::before{
+  content:'';position:absolute;left:0;top:.72em;
+  width:5px;height:1px;background:var(--text-3);opacity:.7;
+}
+.note-col li b{color:var(--text-1);font-weight:600}
+.note-col li code{font-size:10px}
+
+.board-foot{
+  margin-top:30px;padding-top:14px;border-top:1px solid var(--rule);
+  font-size:11px;color:var(--text-3);display:flex;flex-wrap:wrap;gap:6px 16px;
+}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important}
+}
+</style>
+</head>
+
+<body data-theme="dark">
+
+<main class="board">
+
+  <header class="board-head">
+    <div>
+      <h1>Seraphine · 大乱斗英雄备选池小窗 · 方案 B <span class="ver">v3</span></h1>
+      <p class="board-sub">
+        极简条 · 深色 / 浅色双主题 · 六种运行状态 ·
+        <b>倒计时平滑推进，进度条跑在合成线程</b> · 点任意英雄卡片可模拟一次抢选。
+        图标取自仓库真实资源 <code>app/resource/game/champion&nbsp;icons</code>。
+      </p>
+    </div>
+
+    <div class="ctls">
+      <div class="ctl">
+        <span class="ctl-k">主题</span>
+        <div class="seg" data-seg="theme" role="group" aria-label="主题">
+          <button type="button" data-theme-set="dark" aria-pressed="true">深色</button>
+          <button type="button" data-theme-set="light" aria-pressed="false">浅色</button>
+        </div>
+      </div>
+      <div class="ctl">
+        <span class="ctl-k">状态</span>
+        <div class="seg" data-seg="scenario" role="group" aria-label="运行状态">
+          <button type="button" data-scen="idle" aria-pressed="false">等待上架</button>
+          <button type="button" data-scen="normal" aria-pressed="true">就绪</button>
+          <button type="button" data-scen="swapping" aria-pressed="false">正在更换</button>
+          <button type="button" data-scen="success" aria-pressed="false">抢选成功</button>
+          <button type="button" data-scen="error" aria-pressed="false">更换失败</button>
+          <button type="button" data-scen="urgent" aria-pressed="false">倒计时告急</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="board-main">
+    <section class="stage">
+      <p class="stage-cap"><b>B · 极简条</b><span class="dim">360 × 277–362</span>
+        <span class="dim">高度随池子行数 · 状态并入池头</span></p>
+      <div class="win" data-win="b" role="group" aria-label="大乱斗英雄备选池小窗"></div>
+    </section>
+
+    <section class="notes">
+      <div class="note-col">
+        <h3>对照现状</h3>
+        <ul>
+          <li><b>英雄名上屏。</b>现在 56px 卡片只有头像；卡片下方给 11px 名字，
+            大乱斗里认名字比认图快。</li>
+          <li><b>倒计时成为第一层级。</b>标签在上、31px 数字、4px 进度条紧贴数字；
+            现在是 11px 灰字 + 一根无轨道、写死颜色的进度条。</li>
+          <li><b>进度条连续移动。</b>本页用合成线程动画推进（见「落地注意」）；
+            之前每秒才动一次，后来改成逐帧写 width 仍会 1px 一跳，现在用位移。</li>
+          <li><b>「期望英雄」改「优先目标」并放大。</b>现在是最底部的 28px 圆点；
+            新版 22px 图标 + 名字，目标在池内时 chip 亮起。</li>
+          <li><b>池里命中目标的卡片加「目标」角标</b> + 主题色描边，
+            不用自己比对头像。</li>
+          <li><b>状态并进池头。</b>成功绿 / 失败红 / 更换中 spinner，
+            出现位置就在刚点过的卡片上方；空池时自动隐藏。</li>
+          <li><b>数量回到池头。</b>「6 位」和池子在一起；空池用虚线占位 +
+            「备选池暂时为空」。</li>
+          <li><b>更换中锁定其它卡片。</b>现在连点可以打出多个
+            <code>benchSwap</code> 请求。</li>
+          <li><b>标题栏 48px → 36px。</b>省 12px。当前代码
+            <code>setContentsMargins(0,36,…)</code> 和 48px 的 FluentTitleBar
+            对不齐，内容实际靠 vBoxLayout 的 40px 上边距才躲开标题栏，落地时统一。</li>
+          <li><b>高度按行数伸缩。</b>1–5 位 277、6–10 位 362；没有备选池时
+            按两行高度留位，避免窗口忽高忽低。</li>
+        </ul>
+      </div>
+
+      <div class="note-col">
+        <h3>状态与交互</h3>
+        <ul>
+          <li>六种状态：<b>等待上架 / 就绪 / 正在更换 / 抢选成功 / 更换失败 / 倒计时告急</b>；
+            切换时整窗内容一起换。</li>
+          <li>点卡片 = 模拟 <code>benchSwap</code>：该卡 spinner、其它卡锁定，
+            约 950ms 后从池中移除并切成功态。</li>
+          <li>抢选成功跨过 5/6 位时窗口高度跳档（277 ↔ 362）；实机窗口锚在
+            客户端右下角，应保底边不动、只改顶边。</li>
+          <li>自动抢选开关可点，状态与界面同步。</li>
+          <li><b>倒计时：</b>数字按「剩余秒数取整」每秒变；进度条用
+            transform + Web Animations 线性推进，跑在合成线程上；≤10 秒数字
+            与条转琥珀；归零后提示「选人时间已结束」。</li>
+          <li>状态行带 <code>aria-live="polite"</code>；卡片是 button，
+            Tab 可逐个聚焦，Enter / Space 触发。</li>
+        </ul>
+      </div>
+
+      <div class="note-col">
+        <h3>落地注意</h3>
+        <ul>
+          <li><b>进度条不平滑的真实原因：</b>qfluentwidgets 的
+            <code>ProgressBar.setValue()</code> 内部每次都会
+            <code>ani.stop(); setEndValue(v); setDuration(150); ani.start()</code>。
+            现在 50ms 调一次 setValue，等于 150ms 的动画永远走不完就被重启，
+            画出来的值滞后、一卡一卡。</li>
+          <li><b>平滑改法：</b><code>setUseAni(False)</code> 后直接更新，
+            或绕过 setValue 用 <code>setVal(float)</code>（只设 _val + update()），
+            由 16–50ms 的 QTimer 驱动。SmoothProgressBar 的 paintEvent 读的
+            就是 val，所以 setVal 这条路是现成的，不需要改绘制。</li>
+          <li><b>比例用 maxTime：</b>updateTimer() 已经记下首次
+            <code>adjustedTimeLeftInPhase</code> 作为 maxTime；本页按 45 秒示意，
+            不要照抄常量。</li>
+          <li><b>主题色走 <code>themeColor()</code>：</b>现在
+            <code>setCustomBarColor("#009688", "#009688")</code> 写死了，
+            跟用户自定义主题色脱节；本页按默认 <code>#009faa</code> 呈现。</li>
+          <li><b>英雄名要传进窗口：</b><code>updateBenchChampions()</code> 目前只给
+            <code>{championId, icon}</code>；名称可取自 <code>ChampionAlias</code>
+            本地缓存或 LCU。</li>
+          <li>状态色建议进 <code>StyleSheet.ARAM_BENCH</code> 的 dark/light 两套 QSS；
+            成功提示 4 秒后回落到中性，失败要保留到下次成功或用户再操作。</li>
+          <li>尺寸要同步改 <code>setFixedSize()</code> 与
+            <code>adjustPosition()</code>（含 DPI 换算）；高度变化时重算右下角定位。</li>
+        </ul>
+      </div>
+
+      <div class="note-col">
+        <h3>取舍与待确认</h3>
+        <ul>
+          <li><b>没写「6/10」容量分母：</b>备选池上限随版本/模式变化，
+            未核实前只显示「6 位」。</li>
+          <li><b>优先目标不分优先级视觉：</b><code>desiredChampions</code> 是有序
+            列表，但多目标同时上架时该先抢谁，UI 没表达；本页只标「在池」。</li>
+          <li><b>是否显示「当前持有英雄」：</b>大乱斗的交换是「你 ↔ 备选席」，
+            窗口里没有你当前英雄作参照；客户端左侧本身有显示，要不要重复由你定。</li>
+          <li><b>高度自适应：</b>1 行 277 / 2 行 362。实机若不想动高度，
+            回到固定 362 即可，内容完整，只是单行时下方留白。</li>
+          <li><b>Mica 只是示意：</b>页面里的半透明窗口是对 Mica 的模拟，
+            实机是系统壁纸模糊，明暗观感会随桌面变化。</li>
+        </ul>
+      </div>
+    </section>
+  </div>
+
+  <footer class="board-foot">
+    <span>方案 B · 静态预览，未修改 <code>app/</code> 下任何代码。</span>
+    <span>尺寸：360 × 277–362</span>
+    <span>v3 · 进度条：translateX + Web Animations</span>
+    <span>图标：app/resource/game/champion icons</span>
+  </footer>
+
+</main>
+
+<script>
+/* ===========================================================================
+   数据层
+   ---------------------------------------------------------------------------
+   6 位备选池英雄 + 3 位优先目标，仅用于验证排版。
+   名称按国服常用译名写，实机不要用这里的映射，走 ChampionAlias / LCU。
+   =========================================================================== */
+const ICON = id => `../../app/resource/game/champion%20icons/${id}.png`;
+
+const BENCH_ALL = [
+  { id: 63,  name: '布兰德' },
+  { id: 267, name: '娜美' },
+  { id: 111, name: '诺提勒斯' },
+  { id: 154, name: '扎克' },
+  { id: 222, name: '金克丝' },
+  { id: 101, name: '泽拉斯' },
+  { id: 110, name: '韦鲁斯' },
+  { id: 412, name: '锤石' },
+  { id: 223, name: '塔姆' },
+  { id: 37,  name: '娑娜' }
+];
+
+const DESIRED = [
+  { id: 147, name: '萨勒芬妮' },
+  { id: 99,  name: '拉克丝' },
+  { id: 267, name: '娜美' }
+];
+
+const TARGET_ID = 267;   // 演示用：被抢的那一位
+const TOTAL_SEC = 45;    // 演示用分母；实机用 updateTimer() 的 maxTime
+
+const mmss = s => {
+  s = Math.max(0, Math.ceil(s));
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+};
+
+/* 全局状态 */
+const S = {
+  theme: 'dark',
+  scenario: 'normal',
+  autoSwap: true,
+  busyId: 0,
+  seconds: 23,                 // 浮点秒数
+  bench: [],
+  status: { kind: 'muted', text: '' },
+  timeUp: false
+};
+
+/* 计时器 DOM 缓存 + 进度条动画句柄 */
+let tEls = {};
+let barAnim = null;   // 进度条 Web Animation
+let barFrom = 0;      // 这段动画的起点秒数
+
+/* ===========================================================================
+   SVG 片段（不引图标库，线条风格对齐 Fluent）
+   =========================================================================== */
+const SVG = {
+  min: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.2 6h7.6" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>',
+  close: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.6 2.6 9.4 9.4M9.4 2.6 2.6 9.4" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>',
+  target: '<svg viewBox="0 0 14 14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.1"><circle cx="7" cy="7" r="4.6"/><circle cx="7" cy="7" r="1.5"/><path d="M7 .9v1.8M7 11.3v1.8M.9 7h1.8M11.3 7h1.8" stroke-linecap="round"/></g></svg>',
+  check: '<svg viewBox="0 0 14 14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="7" cy="7" r="5.6" opacity=".55"/><path d="M4.2 7.1 6.1 9 9.9 5.1" stroke-linecap="round" stroke-linejoin="round"/></g></svg>',
+  alert: '<svg viewBox="0 0 14 14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="7" cy="7" r="5.6" opacity=".55"/><path d="M7 4.2v3.6" stroke-linecap="round"/><circle cx="7" cy="9.9" r=".7" fill="currentColor" stroke="none"/></g></svg>',
+  clock: '<svg viewBox="0 0 14 14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="7" cy="7" r="5.6" opacity=".55"/><path d="M7 3.9V7l2.2 1.5" stroke-linecap="round" stroke-linejoin="round"/></g></svg>'
+};
+
+const statusIcon = kind => {
+  if (kind === 'success') return SVG.check;
+  if (kind === 'error')   return SVG.alert;
+  if (kind === 'warn')    return SVG.clock;
+  if (kind === 'info')    return '<span class="mini-spin" aria-hidden="true"></span>';
+  return '<span class="dot-muted" aria-hidden="true"></span>';
+};
+
+/* ===========================================================================
+   窗口片段
+   =========================================================================== */
+const titlebar = () => `
+  <div class="tb">
+    <img class="tb-ico" src="../../app/resource/images/game.png" alt="">
+    <span class="tb-title">大乱斗英雄备选池</span>
+    <div class="tb-actions">
+      <button class="tb-btn" type="button" aria-label="最小化">${SVG.min}</button>
+      <button class="tb-btn tb-close" type="button" aria-label="关闭">${SVG.close}</button>
+    </div>
+  </div>`;
+
+const autoHTML = () => `
+  <div class="auto">
+    <span class="auto-l">自动抢选</span>
+    <button class="sw" type="button" role="switch"
+            aria-checked="${S.autoSwap}" aria-label="自动抢选"></button>
+  </div>`;
+
+const isDesired = id => DESIRED.some(d => d.id === id);
+
+const cardHTML = c => {
+  const target = isDesired(c.id);
+  const busy = S.busyId === c.id;
+  return `
+  <button class="card${target ? ' is-target' : ''}${busy ? ' is-busy' : ''}"
+          type="button" data-champ="${c.id}"${busy ? ' disabled' : ''}
+          aria-label="${c.name}${target ? '，优先目标' : ''}${busy ? '，正在更换' : ''}">
+    <span class="thumb" data-letter="${c.name.charAt(0)}">
+      <img src="${ICON(c.id)}" alt="" loading="lazy"
+           onerror="this.parentNode.classList.add('no-img');this.remove()">
+      ${target ? '<span class="badge">目标</span>' : ''}
+      ${busy ? '<span class="spinner" aria-hidden="true"></span>' : ''}
+    </span>
+    <span class="cname">${c.name}</span>
+  </button>`;
+};
+
+const gridHTML = () => {
+  if (!S.bench.length) {
+    return `
+    <div class="empty">
+      <span class="pulse" aria-hidden="true"></span>
+      <span class="empty-t">备选池暂时为空</span>
+      <span class="empty-s">有新英雄上架时会自动出现在这里</span>
+    </div>`;
+  }
+  return `<div class="grid${S.busyId ? ' is-locked' : ''}">${S.bench.map(cardHTML).join('')}</div>`;
+};
+
+const chipsHTML = () => DESIRED.map(d => {
+  const inPool = S.bench.some(c => c.id === d.id);
+  return `<span class="chip${inPool ? ' is-in' : ''}">
+    <img src="${ICON(d.id)}" alt="">
+    <span>${d.name}</span>
+  </span>`;
+}).join('');
+
+const statusHTML = () => `
+  <div class="status" data-kind="${S.status.kind}" role="status" aria-live="polite">
+    ${statusIcon(S.status.kind)}
+    <span class="status-t">${S.status.text}</span>
+  </div>`;
+
+const benchCount = () => `${S.bench.length} 位`;
+
+function winB() {
+  return `
+  ${titlebar()}
+  <div class="win-body">
+    <div class="b-top">
+      <div class="timebox" data-timebox>
+        <span data-time-label>剩余时间</span>
+        <b data-mmss>00:23</b>
+      </div>
+      ${autoHTML()}
+    </div>
+    <div class="track" data-track><i data-fill></i></div>
+
+    <div class="b-head">
+      <span class="sec-t">备选池</span>
+      <span class="sec-n">${benchCount()}</span>
+      ${S.scenario === 'idle' ? '' : statusHTML()}
+    </div>
+
+    ${gridHTML()}
+
+    <div class="b-foot">
+      <span class="sec-k">${SVG.target}优先目标</span>
+      <div class="chips">${chipsHTML()}</div>
+    </div>
+  </div>`;
+}
+
+/* ===========================================================================
+   状态机
+   =========================================================================== */
+let swapTimer = null;
+
+const firstSix = () => BENCH_ALL.slice(0, 6).map(c => ({ ...c }));
+
+function applyScenario(key) {
+  clearTimeout(swapTimer);
+  swapTimer = null;
+  S.scenario = key;
+  S.busyId = 0;
+  S.timeUp = false;
+
+  switch (key) {
+    case 'idle':
+      S.bench = [];
+      S.seconds = 0;
+      S.status = { kind: 'muted', text: '尚未收到备选池数据' };
+      break;
+    case 'normal':
+      S.bench = firstSix();
+      S.seconds = 23;
+      S.status = { kind: 'muted', text: '点击任意英雄立即更换' };
+      break;
+    case 'swapping':
+      S.bench = firstSix();
+      S.seconds = 23;
+      S.busyId = TARGET_ID;
+      S.status = { kind: 'info', text: '正在更换为 娜美…' };
+      break;
+    case 'success':
+      S.bench = firstSix().filter(c => c.id !== TARGET_ID);
+      S.seconds = 17;
+      S.status = { kind: 'success', text: '已抢到 娜美' };
+      break;
+    case 'error':
+      S.bench = firstSix();
+      S.seconds = 23;
+      S.status = { kind: 'error', text: '更换失败 · 客户端未响应' };
+      break;
+    case 'urgent':
+      S.bench = firstSix();
+      S.seconds = 8;
+      S.status = { kind: 'warn', text: '剩余时间不足，尽快选择' };
+      break;
+  }
+}
+
+/* 点卡片 = 模拟一次 benchSwap；倒计时不受影响，继续平滑走 */
+function simulateSwap(id) {
+  if (S.busyId) return;
+  const champ = S.bench.find(c => c.id === id);
+  if (!champ) return;
+
+  clearTimeout(swapTimer);
+  S.scenario = 'swapping';
+  S.busyId = id;
+  S.status = { kind: 'info', text: `正在更换为 ${champ.name}…` };
+  render();
+
+  swapTimer = setTimeout(() => {
+    S.bench = S.bench.filter(c => c.id !== id);
+    S.busyId = 0;
+    S.scenario = 'success';
+    S.status = { kind: 'success', text: `已抢到 ${champ.name}` };
+    render();   // 5 位 → 1 行，高度会顺着 CSS transition 收上去
+  }, 950);
+}
+
+/* ===========================================================================
+   渲染 + 计时
+   =========================================================================== */
+function render() {
+  document.body.dataset.theme = S.theme;
+
+  document.querySelectorAll('[data-theme-set]').forEach(btn => {
+    btn.setAttribute('aria-pressed', String(btn.dataset.themeSet === S.theme));
+  });
+  document.querySelectorAll('[data-scen]').forEach(btn => {
+    btn.setAttribute('aria-pressed', String(btn.dataset.scen === S.scenario));
+  });
+
+  const win = document.querySelector('[data-win="b"]');
+  if (barAnim) { barAnim.cancel(); barAnim = null; }
+  win.innerHTML = winB();
+  /* 1–5 位收成一行高度；空池按两行留位 */
+  win.classList.toggle('is-one-row', S.bench.length > 0 && S.bench.length <= 5);
+
+  cacheTimerEls();
+  startBar(S.seconds);
+  paintTimer();
+}
+
+function cacheTimerEls() {
+  tEls = {
+    fill: document.querySelector('[data-fill]'),
+    mmss: document.querySelector('[data-mmss]'),
+    label: document.querySelector('[data-time-label]'),
+    timebox: document.querySelector('[data-timebox]'),
+    track: document.querySelector('[data-track]')
+  };
+}
+
+/* ---- 进度条：线性、合成线程 ----
+   用 translateX + Web Animations 从当前比例走到 0，时长 = 剩余秒数。
+   不走 width：width 每帧触发布局与像素取整，慢速（约 7px/s）时会 1px 一跳。
+   translateX 的动画跑在合成线程上，主线程忙也不掉帧，且按亚像素渲染。 */
+function startBar(sec) {
+  if (barAnim) { barAnim.cancel(); barAnim = null; }
+  barFrom = sec;
+
+  if (!tEls.fill) return;
+
+  const pct = Math.max(0, Math.min(1, sec / TOTAL_SEC));
+  const from = `translateX(${((pct - 1) * 100).toFixed(3)}%)`;
+  tEls.fill.style.transform = from;       // 先对齐当前位置，避免闪跳
+
+  if (sec <= 0) return;
+
+  barAnim = tEls.fill.animate(
+    [{ transform: from }, { transform: 'translateX(0%)' }],
+    { duration: sec * 1000, easing: 'linear', fill: 'forwards' }
+  );
+  barAnim.onfinish = handleTimeUp;
+}
+
+function handleTimeUp() {
+  if (S.timeUp) return;
+  S.timeUp = true;
+  S.seconds = 0;
+  S.status = { kind: 'warn', text: '选人时间已结束' };
+  render();
+}
+
+/* 只绘制文字与告急色；条的位移归 Web Animation 管 */
+function paintTimer() {
+  if (!tEls.mmss) cacheTimerEls();
+  if (!tEls.mmss) return;
+
+  const idle = S.scenario === 'idle';
+  const sec = S.seconds;
+  const urgent = !idle && sec <= 10;
+
+  const label = idle ? '等待上架' : '剩余时间';
+  if (tEls.label.textContent !== label) tEls.label.textContent = label;
+
+  const text = idle ? '—' : mmss(sec);
+  if (tEls.mmss.textContent !== text) tEls.mmss.textContent = text;
+
+  tEls.timebox.classList.toggle('is-urgent', urgent);
+  tEls.track.classList.toggle('is-urgent', urgent);
+}
+
+/* RAF 只做两件事：把文字钉在动画时钟上、到点收尾。
+   条的位移不在这里更新，所以主线程抖动不会影响条的顺滑。 */
+function tick() {
+  if (S.scenario !== 'idle') {
+    let remaining = S.seconds;
+    if (barAnim) {
+      const t = Number(barAnim.currentTime);
+      if (Number.isFinite(t)) remaining = Math.max(0, barFrom - t / 1000);
+    }
+    S.seconds = remaining;
+    paintTimer();
+
+    if (remaining <= 0.01 && !S.timeUp) handleTimeUp();
+  }
+
+  requestAnimationFrame(tick);
+}
+
+/* ===========================================================================
+   事件
+   =========================================================================== */
+document.addEventListener('click', e => {
+  const themeBtn = e.target.closest('[data-theme-set]');
+  if (themeBtn) {
+    S.theme = themeBtn.dataset.themeSet;
+    render();
+    return;
+  }
+
+  const scenBtn = e.target.closest('[data-scen]');
+  if (scenBtn) {
+    applyScenario(scenBtn.dataset.scen);
+    render();
+    return;
+  }
+
+  const sw = e.target.closest('.sw');
+  if (sw) {
+    S.autoSwap = !S.autoSwap;
+    render();
+    return;
+  }
+
+  const card = e.target.closest('[data-champ]');
+  if (card) {
+    simulateSwap(Number(card.dataset.champ));
+  }
+});
+
+/* 首帧 */
+applyScenario('normal');
+render();
+requestAnimationFrame(tick);
+</script>
+
+</body>
+</html>
