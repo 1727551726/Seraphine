@@ -1841,12 +1841,18 @@ async def autoBenchSwap(data, benchState: AramBenchState):
 
     # 立即执行抢选
     try:
-        await connector.benchSwap(targetChampionId)
-        benchState.swapped = True
-        return True
+        result = await connector.benchSwap(targetChampionId)
     except Exception as e:
         logger.error(f"大乱斗自动抢选失败: {e}")
         return False
+
+    if isinstance(result, dict) and result.get('errorCode'):
+        logger.error(
+            f"大乱斗自动抢选失败: {result.get('message') or result.get('errorCode')}")
+        return False
+
+    benchState.swapped = True
+    return True
 
 
 async def fixLCUWindowViaExe():

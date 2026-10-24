@@ -243,7 +243,6 @@ class ChampionCard(QWidget):
         self._target = target
         self._preselected = False
         self._busy = False
-        self._locked = False
         self._hover = False
         self._pressed = False
         self._spin = 0
@@ -292,13 +291,6 @@ class ChampionCard(QWidget):
             self._spinTimer.stop()
         self.update()
 
-    def setLocked(self, locked: bool):
-        if self._locked == locked:
-            return
-
-        self._locked = locked
-        self.update()
-
     def __onSpin(self):
         self._spin = (self._spin + 20) % 360
         self.update()
@@ -306,9 +298,6 @@ class ChampionCard(QWidget):
     def paintEvent(self, e):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-
-        if self._locked:
-            painter.setOpacity(0.42)
 
         iconRect = QRectF(0, 0, CARD_WIDTH, 65)
         path = QPainterPath()
@@ -409,11 +398,11 @@ class ChampionCard(QWidget):
 
     def mousePressEvent(self, e):
         if e.button() == Qt.RightButton:
-            if not self._locked and not self._busy:
+            if not self._busy:
                 self.rightClicked.emit(self.championId)
             return
 
-        if e.button() == Qt.LeftButton and not self._locked and not self._busy:
+        if e.button() == Qt.LeftButton and not self._busy:
             self._pressed = True
             self.update()
             return
@@ -424,14 +413,14 @@ class ChampionCard(QWidget):
             self._pressed = False
             self.update()
             if (self.rect().contains(e.pos())
-                    and not self._locked and not self._busy):
+                    and not self._busy):
                 self.clicked.emit(self.championId)
             return
         return super().mouseReleaseEvent(e)
 
     def keyPressEvent(self, e):
         if e.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space) \
-                and not self._locked and not self._busy:
+                and not self._busy:
             self.clicked.emit(self.championId)
             return
         return super().keyPressEvent(e)
@@ -1006,9 +995,8 @@ class AramBenchWindow(OpggWindowBase):
         self.benchCount.setText(f'{len(entries)} 位')
 
         if not entries:
-            while self.benchGrid.count():
-                self.benchGrid.takeAt(0)
             for card in self._cards:
+                self.benchGrid.removeWidget(card)
                 card.hide()
                 card.deleteLater()
             self._cards = []
@@ -1037,33 +1025,13 @@ class AramBenchWindow(OpggWindowBase):
 
             card.setPreselected(championId == self.preSelectedChampionId)
 
-            if self._swapping:
-                card.setBusy(championId == self._busyChampionId)
-                card.setLocked(championId != self._busyChampionId)
-            else:
-                card.setBusy(False)
-                card.setLocked(False)
+            # 只让正在更换的那张卡进入 busy；其余卡片保持原样，
+            # 避免点一次换英雄就整排头像重绘、闪一下
+            card.setBusy(self._swapping and championId == self._busyChampionId)
 
             newCards.append(card)
 
-        newIds = [card.championId for card in newCards]
-        oldIds = [card.championId for card in self._cards]
-
-        # 列表和顺序都没变时不动布局，避免整排卡片重绘
-        if oldIds != newIds:
-            while self.benchGrid.count():
-                self.benchGrid.takeAt(0)
-            for index, card in enumerate(newCards):
-                self.benchGrid.addWidget(
-                    card, index // BENCH_COLUMNS, index % BENCH_COLUMNS,
-                    Qt.AlignLeft | Qt.AlignTop)
-
-        # 不再需要的旧卡片
-        for card in self._cards:
-            if card.championId not in newIds:
-                card.hide()
-                card.deleteLater()
-
+        self.__applyCardLayout(newCards)
         self._cards = newCards
         self.__updateCardTooltips()
         self.benchGridWidget.setVisible(True)
@@ -1072,6 +1040,46 @@ class AramBenchWindow(OpggWindowBase):
         rows = math.ceil(len(newCards) / BENCH_COLUMNS)
         self.benchGridWidget.setFixedHeight(
             rows * CARD_HEIGHT + (rows - 1) * CARD_GAP)
+
+    def __applyCardLayout(self, cards: list):
+        """把卡片放到目标格，只动位置真正变化的那几张。
+
+        旧实现每次先把整个布局清空再按顺序重建，哪怕只换了一个英雄，
+        所有卡片也会被重新 addWidget 一遍；在透明窗口下这会表现为整排
+        头像一起刷新。这里改为逐格对位，未变化的卡片完全不碰。
+        """
+        targetCell = {
+            card.championId: divmod(index, BENCH_COLUMNS)
+            for index, card in enumerate(cards)
+        }
+        keepIds = set(targetCell)
+
+        # 先摘掉不再显示的卡片，以及位置发生变化的卡片
+        for card in self._cards:
+            if card.championId not in keepIds:
+                self.benchGrid.removeWidget(card)
+                card.hide()
+                card.deleteLater()
+                continue
+
+            row, col = targetCell[card.championId]
+            item = self.benchGrid.itemAtPosition(row, col)
+            if item is None or item.widget() is not card:
+                self.benchGrid.removeWidget(card)
+
+        # 再把新增 / 移动的卡片放回目标格
+        for card in cards:
+            row, col = targetCell[card.championId]
+            item = self.benchGrid.itemAtPosition(row, col)
+            if item is not None and item.widget() is card:
+                continue
+
+            # 顺序调整时，目标格可能还被另一张待移动的卡占着
+            if item is not None and item.widget() is not None:
+                self.benchGrid.removeWidget(item.widget())
+
+            self.benchGrid.addWidget(
+                card, row, col, Qt.AlignLeft | Qt.AlignTop)
 
     def __updateWindowHeight(self):
         # 固定为两排头像的高度：1-5 个和 6-10 个英雄都保持同一高度，
@@ -1122,7 +1130,9 @@ class AramBenchWindow(OpggWindowBase):
     def __updateCardTooltips(self):
         hint = self.__cardHint()
         for card in self._cards:
-            card.setToolTip(f'{card.name}\n{hint}')
+            text = f'{card.name}\n{hint}'
+            if card.toolTip() != text:
+                card.setToolTip(text)
 
     def __idleHint(self) -> str:
         if not self._cards:
@@ -1221,8 +1231,7 @@ class AramBenchWindow(OpggWindowBase):
         self._swapping = True
         self._busyChampionId = championId
 
-        for item in self._cards:
-            item.setLocked(item is not card)
+        # 只给被点击的卡片转圈：其它卡片保持原样，点一次换英雄不会整排闪一下
         card.setBusy(True)
 
         text = self.tr('正在抢下 {}…') if auto else self.tr('正在更换为 {}…')
@@ -1254,7 +1263,6 @@ class AramBenchWindow(OpggWindowBase):
             for item in self._cards:
                 try:
                     item.setBusy(False)
-                    item.setLocked(False)
                 except RuntimeError:
                     # 备选池刷新时卡片可能已被 deleteLater
                     pass

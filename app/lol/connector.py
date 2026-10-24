@@ -840,7 +840,7 @@ class LolClientConnector(QObject):
     @retry()
     async def benchSwap(self, championId):
         res = await self.__post(f"/lol-champ-select/v1/session/bench/swap/{championId}")
-        return await res.json()
+        return await self.__json_or_default(res)
 
     # 获取当前选择英雄
     @retry()
@@ -852,7 +852,7 @@ class LolClientConnector(QObject):
     @retry()
     async def reroll(self):
         res = await self.__post("/lol-champ-select/v1/session/my-selection/reroll")
-        return await res.json()
+        return await self.__json_or_default(res)
 
     # 选择英雄
     @retry()
@@ -1190,6 +1190,36 @@ class LolClientConnector(QObject):
     @needLcu()
     async def __patch(self, path, data=None):
         return await self.lcuSess.patch(path, json=data, ssl=False)
+
+    async def __json_or_default(self, res):
+        """安全解析 LCU 响应，空 body 不抛异常。
+
+        bench swap、reroll 等 POST 接口成功时返回 204 No Content，
+        直接 await res.json() 会抛 ContentTypeError；该异常被 retry
+        装饰器当成请求失败，导致一次操作重复发送 5 次，表现为换英雄
+        很慢、一直转圈。
+        """
+        # 成功但无内容
+        if res.status == 204:
+            return {}
+
+        try:
+            data = await res.json()
+        except (aiohttp.ContentTypeError, ValueError):
+            # 空 body / 非 JSON
+            data = None
+
+        # 4xx/5xx 一律按失败处理，并保证带上 errorCode
+        if res.status >= 400:
+            if not isinstance(data, dict):
+                data = {}
+            if not data.get('errorCode'):
+                data['errorCode'] = res.status
+            if not data.get('message'):
+                data['message'] = res.reason or ''
+            return data
+
+        return {} if data is None else data
 
     async def __sgp__get(self, path, params=None):
         assert self.inTencent
